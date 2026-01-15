@@ -1,0 +1,485 @@
+"""d-quant2 Web 界面
+
+使用 Streamlit 创建交互式回测结果展示界面
+"""
+
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import json
+import sys
+import os
+
+# 添加项目路径
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from dquant2 import BacktestEngine, BacktestConfig
+
+# 页面配置
+st.set_page_config(
+    page_title="d-quant2 回测系统",
+    page_icon="📈",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# 自定义CSS
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: 700;
+        color: #1f77b4;
+        margin-bottom: 1rem;
+    }
+    .metric-card {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 1rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+    }
+    .positive {
+        color: #00c853;
+        font-weight: bold;
+    }
+    .negative {
+        color: #ff1744;
+        font-weight: bold;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+def create_equity_curve_chart(equity_curve):
+    """创建权益曲线图"""
+    df = pd.DataFrame(equity_curve)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        subplot_titles=('权益曲线', '现金与持仓'),
+        row_heights=[0.7, 0.3]
+    )
+    
+    # 权益曲线
+    fig.add_trace(
+        go.Scatter(
+            x=df['timestamp'],
+            y=df['equity'],
+            mode='lines',
+            name='总权益',
+            line=dict(color='#1f77b4', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(31, 119, 180, 0.1)'
+        ),
+        row=1, col=1
+    )
+    
+    # 现金和持仓
+    fig.add_trace(
+        go.Scatter(
+            x=df['timestamp'],
+            y=df['cash'],
+            mode='lines',
+            name='现金',
+            line=dict(color='#2ca02c', width=1.5)
+        ),
+        row=2, col=1
+    )
+    
+    fig.add_trace(
+        go.Scatter(
+            x=df['timestamp'],
+            y=df['positions_value'],
+            mode='lines',
+            name='持仓市值',
+            line=dict(color='#ff7f0e', width=1.5)
+        ),
+        row=2, col=1
+    )
+    
+    fig.update_layout(
+        height=600,
+        showlegend=True,
+        hovermode='x unified',
+        template='plotly_white'
+    )
+    
+    fig.update_xaxes(title_text="日期", row=2, col=1)
+    fig.update_yaxes(title_text="权益 (¥)", row=1, col=1)
+    fig.update_yaxes(title_text="金额 (¥)", row=2, col=1)
+    
+    return fig
+
+def create_drawdown_chart(equity_curve):
+    """创建回撤曲线图"""
+    df = pd.DataFrame(equity_curve)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    
+    # 计算回撤
+    cummax = df['equity'].cummax()
+    drawdown = (df['equity'] - cummax) / cummax * 100
+    
+    fig = go.Figure()
+    
+    fig.add_trace(
+        go.Scatter(
+            x=df['timestamp'],
+            y=drawdown,
+            mode='lines',
+            name='回撤',
+            line=dict(color='#d62728', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(214, 39, 40, 0.3)'
+        )
+    )
+    
+    fig.update_layout(
+        title='回撤曲线',
+        xaxis_title='日期',
+        yaxis_title='回撤 (%)',
+        height=300,
+        template='plotly_white',
+        hovermode='x unified'
+    )
+    
+    return fig
+
+def create_trades_chart(trades):
+    """创建交易记录图"""
+    if not trades:
+        return None
+    
+    df = pd.DataFrame(trades)
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
+    
+    # 分离买卖
+    buys = df[df['direction'] == 'BUY']
+    sells = df[df['direction'] == 'SELL']
+    
+    fig = go.Figure()
+    
+    # 买入点
+    fig.add_trace(
+        go.Scatter(
+            x=buys['timestamp'],
+            y=buys['price'],
+            mode='markers',
+            name='买入',
+            marker=dict(
+                symbol='triangle-up',
+                size=12,
+                color='#2ca02c',
+                line=dict(width=1, color='white')
+            )
+        )
+    )
+    
+    # 卖出点
+    fig.add_trace(
+        go.Scatter(
+            x=sells['timestamp'],
+            y=sells['price'],
+            mode='markers',
+            name='卖出',
+            marker=dict(
+                symbol='triangle-down',
+                size=12,
+                color='#d62728',
+                line=dict(width=1, color='white')
+            )
+        )
+    )
+    
+    fig.update_layout(
+        title='交易记录',
+        xaxis_title='日期',
+        yaxis_title='价格 (¥)',
+        height=300,
+        template='plotly_white',
+        hovermode='x unified'
+    )
+    
+    return fig
+
+def main():
+    st.markdown('<h1 class="main-header">📈 d-quant2 量化回测系统</h1>', unsafe_allow_html=True)
+    
+    # 侧边栏 - 回测配置
+    with st.sidebar:
+        st.header("⚙️ 回测配置")
+        
+        # 基本参数
+        st.subheader("基本设置")
+        symbol = st.text_input("股票代码", "000001")
+        start_date = st.text_input("开始日期 (YYYYMMDD)", "20200101")
+        end_date = st.text_input("结束日期 (YYYYMMDD)", "20231231")
+        initial_cash = st.number_input("初始资金 (¥)", min_value=10000, value=1000000, step=10000)
+        
+        # 数据源
+        st.subheader("数据设置")
+        
+        # 数据源映射：中文显示 -> 英文value
+        data_provider_map = {
+            "模拟数据": "mock",
+            "真实数据(AkShare)": "akshare"
+        }
+        data_provider_display = st.selectbox("数据源", list(data_provider_map.keys()))
+        data_provider = data_provider_map[data_provider_display]
+        
+        # 策略设置
+        st.subheader("策略设置")
+        
+        # 策略映射：中文显示 -> 英文value
+        strategy_map = {
+            "双均线交叉": "ma_cross"
+        }
+        strategy_display = st.selectbox("策略", list(strategy_map.keys()))
+        strategy_name = strategy_map[strategy_display]
+        
+        if strategy_name == "ma_cross":
+            fast_period = st.slider("快线周期", 3, 30, 5)
+            slow_period = st.slider("慢线周期", 10, 60, 20)
+            strategy_params = {
+                'fast_period': fast_period,
+                'slow_period': slow_period
+            }
+        else:
+            strategy_params = {}
+        
+        # 资金管理
+        st.subheader("资金管理")
+        
+        # 资金策略映射：中文显示 -> 英文value
+        capital_map = {
+            "固定比例": "fixed_ratio",
+            "凯利公式": "kelly"
+        }
+        capital_display = st.selectbox("资金策略", list(capital_map.keys()))
+        capital_strategy = capital_map[capital_display]
+        
+        if capital_strategy == "fixed_ratio":
+            ratio = st.slider("投资比例", 0.05, 1.0, 0.2, 0.05)
+            capital_params = {'ratio': ratio}
+        else:  # kelly
+            win_rate = st.slider("胜率", 0.3, 0.8, 0.55, 0.05)
+            profit_loss_ratio = st.slider("盈亏比", 1.0, 3.0, 1.5, 0.1)
+            capital_params = {
+                'win_rate': win_rate,
+                'profit_loss_ratio': profit_loss_ratio
+            }
+        
+        # 交易成本
+        st.subheader("交易成本")
+        commission_rate = st.number_input("佣金费率", 0.0001, 0.01, 0.0003, 0.0001, format="%.4f")
+        slippage = st.number_input("滑点", 0.0, 0.01, 0.001, 0.001, format="%.3f")
+        
+        # 风控
+        st.subheader("风控设置")
+        max_position_ratio = st.slider("最大持仓比例", 0.1, 1.0, 0.5, 0.1)
+        
+        # 运行按钮
+        run_backtest = st.button("🚀 运行回测", type="primary", use_container_width=True)
+    
+    # 主区域
+    if run_backtest:
+        with st.spinner("🔄 正在运行回测..."):
+            try:
+                # 创建配置
+                config = BacktestConfig(
+                    symbol=symbol,
+                    start_date=start_date,
+                    end_date=end_date,
+                    initial_cash=initial_cash,
+                    data_provider=data_provider,
+                    strategy_name=strategy_name,
+                    strategy_params=strategy_params,
+                    capital_strategy=capital_strategy,
+                    capital_params=capital_params,
+                    commission_rate=commission_rate,
+                    slippage=slippage,
+                    max_position_ratio=max_position_ratio,
+                )
+                
+                # 运行回测
+                engine = BacktestEngine(config)
+                results = engine.run()
+                
+                # 保存结果到session state
+                st.session_state['results'] = results
+                st.success("✅ 回测完成！")
+                
+            except Exception as e:
+                st.error(f"❌ 回测失败: {str(e)}")
+                st.exception(e)
+    
+    # 显示结果
+    if 'results' in st.session_state:
+        results = st.session_state['results']
+        portfolio = results['portfolio']
+        performance = results['performance']
+        
+        # 核心指标卡片
+        st.subheader("📊 核心指标")
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            total_return_pct = portfolio['total_return_pct']
+            color_class = 'positive' if total_return_pct > 0 else 'negative'
+            st.metric(
+                "总收益率",
+                f"{total_return_pct:.2f}%",
+                delta=f"{portfolio['total_return']:,.0f} ¥"
+            )
+        
+        with col2:
+            st.metric(
+                "年化收益率",
+                f"{performance['annual_return']:.2f}%"
+            )
+        
+        with col3:
+            st.metric(
+                "最大回撤",
+                f"{performance['max_drawdown']:.2f}%",
+                delta=None,
+                delta_color="inverse"
+            )
+        
+        with col4:
+            st.metric(
+                "夏普比率",
+                f"{performance['sharpe_ratio']:.2f}"
+            )
+        
+        # 详细指标
+        st.subheader("📈 详细指标")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown("**收益与风险**")
+            metrics_df = pd.DataFrame({
+                '指标': ['总收益率', '年化收益率', '最大回撤', '波动率', '夏普比率', '索提诺比率'],
+                '数值': [
+                    f"{portfolio['total_return_pct']:.2f}%",
+                    f"{performance['annual_return']:.2f}%",
+                    f"{performance['max_drawdown']:.2f}%",
+                    f"{performance['volatility']:.2f}%",
+                    f"{performance['sharpe_ratio']:.2f}",
+                    f"{performance['sortino_ratio']:.2f}"
+                ]
+            })
+            st.dataframe(metrics_df, hide_index=True, use_container_width=True)
+        
+        with col2:
+            st.markdown("**资金与交易**")
+            metrics_df = pd.DataFrame({
+                '指标': ['初始资金', '最终权益', '现金余额', '持仓市值', '交易次数', '总手续费'],
+                '数值': [
+                    f"¥{portfolio['initial_cash']:,.0f}",
+                    f"¥{portfolio['total_value']:,.0f}",
+                    f"¥{portfolio['current_cash']:,.0f}",
+                    f"¥{portfolio['positions_value']:,.0f}",
+                    f"{portfolio['num_trades']}",
+                    f"¥{portfolio['total_commission']:,.2f}"
+                ]
+            })
+            st.dataframe(metrics_df, hide_index=True, use_container_width=True)
+        
+        # 交易统计
+        if performance.get('win_rate') is not None:
+            st.markdown("**交易统计**")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("胜率", f"{performance['win_rate']:.2f}%")
+            with col2:
+                st.metric("盈亏比", f"{performance['profit_loss_ratio']:.2f}")
+            with col3:
+                st.metric("完整交易次数", f"{performance.get('num_complete_trades', 0)}")
+        
+        # 图表
+        st.subheader("📉 权益曲线")
+        equity_fig = create_equity_curve_chart(results['equity_curve'])
+        st.plotly_chart(equity_fig, use_container_width=True)
+        
+        # 回撤曲线
+        st.subheader("📉 回撤分析")
+        drawdown_fig = create_drawdown_chart(results['equity_curve'])
+        st.plotly_chart(drawdown_fig, use_container_width=True)
+        
+        # 交易记录
+        if results['trades']:
+            st.subheader("💱 交易记录")
+            trades_fig = create_trades_chart(results['trades'])
+            if trades_fig:
+                st.plotly_chart(trades_fig, use_container_width=True)
+            
+            # 交易明细表
+            with st.expander("📋 查看交易明细"):
+                trades_df = pd.DataFrame(results['trades'])
+                trades_df['timestamp'] = pd.to_datetime(trades_df['timestamp'])
+                st.dataframe(
+                    trades_df[['timestamp', 'direction', 'quantity', 'price', 'commission']],
+                    hide_index=True,
+                    use_container_width=True
+                )
+        
+        # 权益曲线数据
+        with st.expander("📊 权益曲线数据"):
+            equity_df = pd.DataFrame(results['equity_curve'])
+            equity_df['timestamp'] = pd.to_datetime(equity_df['timestamp'])
+            st.dataframe(equity_df, hide_index=True, use_container_width=True)
+        
+        # 导出结果
+        st.subheader("💾 导出结果")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # 导出配置
+            config_json = json.dumps(results['config'], indent=2, ensure_ascii=False)
+            st.download_button(
+                label="📥 下载配置 (JSON)",
+                data=config_json,
+                file_name="backtest_config.json",
+                mime="application/json"
+            )
+        
+        with col2:
+            # 导出交易记录
+            if results['trades']:
+                trades_df = pd.DataFrame(results['trades'])
+                csv = trades_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 下载交易记录 (CSV)",
+                    data=csv,
+                    file_name="trades.csv",
+                    mime="text/csv"
+                )
+    
+    else:
+        # 初始提示
+        st.info("👈 请在左侧设置回测参数，然后点击「运行回测」按钮开始分析")
+        
+        st.markdown("""
+        ### 🎯 使用说明
+        
+        1. **配置参数**: 在左侧面板设置股票代码、日期范围、初始资金等
+        2. **选择策略**: 目前支持双均线策略，可调整快慢线周期
+        3. **资金管理**: 选择固定比例或凯利公式
+        4. **运行回测**: 点击按钮开始回测
+        5. **查看结果**: 分析收益率、夏普比率、最大回撤等指标
+        6. **导出数据**: 下载配置和交易记录
+        
+        ### ✨ 特点
+        
+        - 📊 **实时可视化** - 权益曲线、回撤分析、交易记录
+        - 🎨 **交互式配置** - 动态调整参数立即看到效果
+        - 📈 **专业指标** - 夏普比率、索提诺比率、胜率、盈亏比
+        - 💾 **结果导出** - 支持JSON和CSV格式
+        """)
+
+if __name__ == '__main__':
+    main()
