@@ -1,0 +1,251 @@
+"""股票数据提供者
+
+支持从baostock等数据源获取股票数据
+"""
+
+import pandas as pd
+import baostock as bs
+from datetime import datetime, timedelta
+from typing import List, Dict, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class BaostockDataProvider:
+    """Baostock数据提供者"""
+    
+    def __init__(self):
+        """初始化Baostock连接"""
+        self.is_logged_in = False
+        self.stock_name_map: Dict[str, str] = {}
+    
+    def login(self) -> bool:
+        """登录Baostock
+        
+        Returns:
+            是否登录成功
+        """
+        try:
+            lg = bs.login()
+            if lg.error_code != '0':
+                logger.error(f"Baostock登录失败: {lg.error_code}, {lg.error_msg}")
+                return False
+            
+            self.is_logged_in = True
+            logger.info("Baostock登录成功")
+            return True
+        except Exception as e:
+            logger.error(f"Baostock登录异常: {e}")
+            return False
+    
+    def logout(self):
+        """登出Baostock"""
+        try:
+            if self.is_logged_in:
+                bs.logout()
+                self.is_logged_in = False
+                logger.info("Baostock登出成功")
+        except Exception as e:
+            logger.error(f"Baostock登出异常: {e}")
+    
+    def load_stock_names(self) -> bool:
+        """加载股票名称映射
+        
+        Returns:
+            是否加载成功
+        """
+        try:
+            if not self.is_logged_in:
+                if not self.login():
+                    return False
+            
+            rs = bs.query_stock_basic(code_name="")
+            if rs.error_code != '0':
+                logger.error(f"查询股票基本信息失败: {rs.error_code}, {rs.error_msg}")
+                return False
+            
+            while rs.next():
+                row = rs.get_row_data()
+                code = row[0].split('.')[1]  # 去掉市场前缀
+                name = row[1]
+                self.stock_name_map[code] = name
+            
+            logger.info(f"加载{len(self.stock_name_map)}只股票信息")
+            return True
+        except Exception as e:
+            logger.error(f"加载股票名称映射异常: {e}")
+            return False
+    
+    def get_stock_list(self, market: str = 'sh') -> List[str]:
+        """获取指定市场的股票列表
+        
+        Args:
+            market: 市场代码, 'sh'或'sz'
+            
+        Returns:
+            股票代码列表
+        """
+        try:
+            if not self.is_logged_in:
+                if not self.login():
+                    return []
+            
+            all_stocks = []
+            rs = bs.query_stock_basic(code_name="")
+            if rs.error_code == '0':
+                while rs.next():
+                    row = rs.get_row_data()
+                    code = row[0]
+                    if code.startswith(market):
+                        stock_code = code.split('.')[1]
+                        all_stocks.append(stock_code)
+            
+            logger.info(f"获取{market}市场{len(all_stocks)}只股票")
+            return all_stocks
+        except Exception as e:
+            logger.error(f"获取股票列表异常: {e}")
+            return []
+    
+    def get_stock_data(
+        self, 
+        stock_code: str, 
+        start_date: str, 
+        end_date: str,
+        retries: int = 3
+    ) -> pd.DataFrame:
+        """获取股票历史数据
+        
+        Args:
+            stock_code: 股票代码(不含市场前缀)
+            start_date: 开始日期 YYYY-MM-DD
+            end_date: 结束日期 YYYY-MM-DD
+            retries: 重试次数
+            
+        Returns:
+            股票数据DataFrame
+        """
+        if not self.is_logged_in:
+            if not self.login():
+                return pd.DataFrame()
+        
+        # 添加市场前缀
+        if stock_code.startswith('6'):
+            baostock_code = f"sh.{stock_code}"
+        else:
+            baostock_code = f"sz.{stock_code}"
+        
+        for attempt in range(retries):
+            try:
+                rs = bs.query_history_k_data_plus(
+                    baostock_code,
+                    "date,open,high,low,close,volume,turn",
+                    start_date=start_date,
+                    end_date=end_date,
+                    frequency="d",
+                    adjustflag="2"  # 后复权
+                )
+                
+                if rs.error_code != '0':
+                    logger.warning(f"查询{stock_code}数据失败(尝试{attempt+1}/{retries}): {rs.error_msg}")
+                    continue
+                
+                data_list = []
+                while rs.next():
+                    data_list.append(rs.get_row_data())
+                
+                if not data_list:
+                    logger.warning(f"股票{stock_code}无数据")
+                    return pd.DataFrame()
+                
+                stock_df = pd.DataFrame(data_list, columns=rs.fields)
+                
+                # 列名转换
+                stock_df.rename(columns={
+                    'date': 'date',
+                    'open': 'open',
+                    'high': 'high',
+                    'low': 'low',
+                    'close': 'close',
+                    'volume': 'volume',
+                    'turn': 'turnover'
+                }, inplace=True)
+                
+                # 数据类型转换
+                for col in ['open', 'high', 'low', 'close', 'volume', 'turnover']:
+                    stock_df[col] = pd.to_numeric(stock_df[col], errors='coerce')
+                
+                stock_df = stock_df.dropna()
+                
+                logger.debug(f"成功获取{stock_code}数据: {len(stock_df)}条")
+                return stock_df
+                
+            except Exception as e:
+                logger.warning(f"获取{stock_code}数据异常(尝试{attempt+1}/{retries}): {e}")
+                if attempt < retries - 1:
+                    continue
+        
+        return pd.DataFrame()
+    
+    def get_fundamental_data(self, stock_code: str, year: str, quarter: int = 4) -> pd.DataFrame:
+        """获取基本面数据
+        
+        Args:
+            stock_code: 股票代码
+            year: 年份
+            quarter: 季度(1-4)
+            
+        Returns:
+            基本面数据DataFrame
+        """
+        if not self.is_logged_in:
+            if not self.login():
+                return pd.DataFrame()
+        
+        # 添加市场前缀
+        if stock_code.startswith('6'):
+            baostock_code = f"sh.{stock_code}"
+        else:
+            baostock_code = f"sz.{stock_code}"
+        
+        try:
+            rs = bs.query_profit_data(code=baostock_code, year=year, quarter=quarter)
+            
+            if rs.error_code != '0':
+                logger.warning(f"查询{stock_code}基本面数据失败: {rs.error_msg}")
+                return pd.DataFrame()
+            
+            data_list = []
+            while rs.next():
+                data_list.append(rs.get_row_data())
+            
+            if not data_list:
+                return pd.DataFrame()
+            
+            fundamental_df = pd.DataFrame(data_list, columns=rs.fields)
+            return fundamental_df
+            
+        except Exception as e:
+            logger.warning(f"获取{stock_code}基本面数据异常: {e}")
+            return pd.DataFrame()
+    
+    def get_stock_name(self, stock_code: str) -> str:
+        """获取股票名称
+        
+        Args:
+            stock_code: 股票代码
+            
+        Returns:
+            股票名称
+        """
+        return self.stock_name_map.get(stock_code, stock_code)
+    
+    def __enter__(self):
+        """上下文管理器进入"""
+        self.login()
+        self.load_stock_names()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器退出"""
+        self.logout()

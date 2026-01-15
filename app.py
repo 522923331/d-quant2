@@ -10,15 +10,19 @@ from plotly.subplots import make_subplots
 import json
 import sys
 import os
+import threading
+import time
+from datetime import datetime
 
 # 添加项目路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dquant2 import BacktestEngine, BacktestConfig
+from dquant2.stock import StockSelector, StockSelectorConfig
 
 # 页面配置
 st.set_page_config(
-    page_title="d-quant2 回测系统",
+    page_title="d-quant2 量化系统",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -205,8 +209,200 @@ def create_trades_chart(trades):
     
     return fig
 
-def main():
-    st.markdown('<h1 class="main-header">📈 d-quant2 量化回测系统</h1>', unsafe_allow_html=True)
+def stock_selection_page():
+    """选股页面"""
+    st.markdown('<h1 class="main-header">🔍 智能选股系统</h1>', unsafe_allow_html=True)
+    
+    # 侧边栏 - 选股配置
+    with st.sidebar:
+        st.header("⚙️ 选股配置")
+        
+        # 基本设置
+        st.subheader("基本设置")
+        market = st.selectbox("市场", ["上证(sh)", "深证(sz)"])
+        market_code = 'sh' if '上证' in market else 'sz'
+        max_stocks = st.number_input("股票数量上限", min_value=1, max_value=100, value=10)
+        
+        # 技术指标
+        st.subheader("技术指标")
+        use_macd = st.checkbox("MACD金叉", value=True)
+        use_kdj = st.checkbox("KDJ可买入", value=True)
+        use_rsi = st.checkbox("RSI超卖(<30)", value=True)
+        use_cci = st.checkbox("CCI超卖(<-100)", value=True)
+        use_wma = st.checkbox("价格 > 加权均线", value=True)
+        use_ema = st.checkbox("价格 > 指数均线", value=True)
+        use_sma = st.checkbox("价格 > 简单均线", value=True)
+        use_volume = st.checkbox("成交量放大", value=True)
+        use_boll = st.checkbox("布林带下轨", value=True)
+        
+        # 价格和换手率
+        st.subheader("价格与换手率")
+        use_price_range = st.checkbox("价格区间", value=True)
+        if use_price_range:
+            col1, col2 = st.columns(2)
+            with col1:
+                min_price = st.number_input("最低价", value=5.0, step=1.0)
+            with col2:
+                max_price = st.number_input("最高价", value=40.0, step=1.0)
+        else:
+            min_price, max_price = 5.0, 40.0
+        
+        use_turnover = st.checkbox("换手率", value=True)
+        if use_turnover:
+            col1, col2 = st.columns(2)
+            with col1:
+                min_turnover = st.number_input("最小换手率%", value=3.0, step=0.5)
+            with col2:
+                max_turnover = st.number_input("最大换手率%", value=12.0, step=0.5)
+        else:
+            min_turnover, max_turnover = 3.0, 12.0
+        
+        # 基本面指标(可选)
+        with st.expander("📊 基本面指标(可选)"):
+            use_pe_ratio = st.checkbox("市盈率 < 20", value=False)
+            use_pb_ratio = st.checkbox("市净率 < 2", value=False)
+            use_roe = st.checkbox("ROE > 15%", value=False)
+            use_net_profit_margin = st.checkbox("净利率 > 10%", value=False)
+        
+        # 开始选股按钮
+        run_selection = st.button("🚀 开始选股", type="primary", use_container_width=True)
+    
+    # 主区域
+    if run_selection:
+        # 清除之前的结果
+        if 'selection_results' in st.session_state:
+            del st.session_state['selection_results']
+        
+        # 创建配置
+        config = StockSelectorConfig(
+            market=market_code,
+            max_stocks=max_stocks,
+            use_macd=use_macd,
+            use_kdj=use_kdj,
+            use_rsi=use_rsi,
+            use_cci=use_cci,
+            use_wma=use_wma,
+            use_ema=use_ema,
+            use_sma=use_sma,
+            use_volume=use_volume,
+            use_boll=use_boll,
+            use_price_range=use_price_range,
+            min_price=min_price,
+            max_price=max_price,
+            use_turnover=use_turnover,
+            min_turnover=min_turnover,
+            max_turnover=max_turnover,
+            use_pe_ratio=use_pe_ratio,
+            use_pb_ratio=use_pb_ratio,
+            use_roe=use_roe,
+            use_net_profit_margin=use_net_profit_margin
+        )
+        
+        # 显示选股条件
+        st.subheader("📋 筛选条件")
+        conditions = config.get_enabled_conditions()
+        if conditions:
+            cols = st.columns(3)
+            for i, cond in enumerate(conditions):
+                cols[i % 3].markdown(f"✓ {cond}")
+        else:
+            st.warning("⚠️ 未启用任何筛选条件")
+        
+        # 执行选股
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        selector = StockSelector(config)
+        
+        # 定义进度回调
+        def progress_callback(message, current, total):
+            if total > 0:
+                progress = min(current / total, 1.0)
+                progress_bar.progress(progress)
+            status_text.text(message)
+        
+        selector.set_progress_callback(progress_callback)
+        
+        with st.spinner("🔄 正在筛选股票..."):
+            try:
+                results = selector.select_stocks()
+                st.session_state['selection_results'] = results
+                st.session_state['selection_config'] = config.to_dict()
+                progress_bar.progress(1.0)
+                status_text.text("✅ 筛选完成!")
+            except Exception as e:
+                st.error(f"❌ 选股失败: {str(e)}")
+                st.exception(e)
+    
+    # 显示结果
+    if 'selection_results' in st.session_state:
+        results = st.session_state['selection_results']
+        
+        st.subheader(f"📊 筛选结果 ({len(results)} 只股票)")
+        
+        if results:
+            # 创建结果表格
+            df_data = []
+            for stock in results:
+                df_data.append({
+                    '股票代码': stock['code'],
+                    '股票名称': stock['name'],
+                    '最新价格': f"¥{stock['price']:.2f}",
+                    '日期': stock['date']
+                })
+            
+            results_df = pd.DataFrame(df_data)
+            st.dataframe(results_df, use_container_width=True, hide_index=True)
+            
+            # 展开显示详细条件
+            with st.expander("📋 查看详细筛选条件"):
+                for stock in results:
+                    st.markdown(f"**{stock['name']} ({stock['code']})**")
+                    for cond in stock['conditions']:
+                        if '通过' in cond:
+                            st.markdown(f"- ✅ {cond}")
+                        else:
+                            st.markdown(f"- ❌ {cond}")
+                    st.divider()
+            
+            # 导出功能
+            st.subheader("💾 导出结果")
+            csv = results_df.to_csv(index=False).encode('utf-8-sig')
+            st.download_button(
+                label="📥 下载选股结果 (CSV)",
+                data=csv,
+                file_name=f"selected_stocks_{datetime.today().strftime('%Y%m%d')}.csv",
+                mime="text/csv"
+            )
+        else:
+            st.info("未找到符合条件的股票,请尝试调整筛选条件")
+    else:
+        # 初始提示
+        st.info("👈 请在左侧设置选股条件,然后点击「开始选股」按钮")
+        
+        st.markdown("""
+        ### 🎯 使用说明
+        
+        1. **选择市场**: 上证或深证
+        2. **设置数量**: 限制筛选股票的数量
+        3. **勾选指标**: 选择要使用的技术指标
+        4. **设置参数**: 配置价格区间、换手率等
+        5. **开始选股**: 点击按钮开始筛选
+        6. **查看结果**: 分析筛选出的股票
+        7. **导出数据**: 下载选股结果
+        
+        ### ✨ 特点
+        
+        - 🔍 **多维度筛选** - 技术指标 + 基本面 + 财务指标
+        - 🎨 **灵活配置** - 自由组合筛选条件
+        - 📊 **实时进度** - 显示筛选进度和当前状态
+        - 💾 **结果导出** - 支持CSV格式导出
+        """)
+
+
+def backtest_page():
+    """回测页面 - 原main函数内容"""
+    st.markdown('<h1 class="main-header">📈 量化回测系统</h1>', unsafe_allow_html=True)
     
     # 侧边栏 - 回测配置
     with st.sidebar:
@@ -480,6 +676,27 @@ def main():
         - 📈 **专业指标** - 夏普比率、索提诺比率、胜率、盈亏比
         - 💾 **结果导出** - 支持JSON和CSV格式
         """)
+
+
+def main():
+    """主函数 - 页面路由"""
+    
+    # 侧边栏页面选择
+    with st.sidebar:
+        st.title("d-quant2 量化系统")
+        page = st.radio(
+            "选择功能",
+            ["📈 回测分析", "🔍 智能选股"],
+            label_visibility="collapsed"
+        )
+        st.divider()
+    
+    # 根据选择显示对应页面
+    if page == "📈 回测分析":
+        backtest_page()
+    else:
+        stock_selection_page()
+
 
 if __name__ == '__main__':
     main()
