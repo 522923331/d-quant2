@@ -49,8 +49,8 @@ htmlcov/
 *.log
 logs/
 
-# Data
-data/
+# Data files (not code modules)
+/data/
 *.csv
 *.h5
 *.pickle
