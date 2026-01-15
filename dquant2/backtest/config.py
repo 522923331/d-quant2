@@ -27,14 +27,14 @@ class BacktestConfig:
     
     # 资金管理配置
     capital_strategy: str = 'fixed_ratio'  # 资金管理策略
-    capital_params: Dict[str, Any] = field(default_factory=lambda: {'ratio': 0.1})
+    capital_params: Dict[str, Any] = field(default_factory=lambda: {'ratio': 0.5})
     
     # 交易成本
     commission_rate: float = 0.0003    # 佣金费率
     slippage: float = 0.0              # 滑点
     
     # 风控配置
-    max_position_ratio: float = 0.3    # 最大单只持仓比例
+    max_position_ratio: float = 0.5    # 最大单只持仓比例
     enable_risk_control: bool = True   # 是否启用风控
     
     # 其他配置

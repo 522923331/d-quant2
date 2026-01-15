@@ -67,7 +67,7 @@ class BacktestEngine:
         # 初始化投资组合
         self.portfolio = Portfolio(
             initial_cash=config.initial_cash,
-            commission_rate=config.commission_rate
+            commission_rate=config.commission_rate #佣金率
         )
         
         # 初始化风控
