@@ -64,10 +64,22 @@ class PerformanceMetrics:
         
         total_return = (final_value / initial_value - 1) * 100
         
-        # 年化收益率
+        # 年化收益率 - 确保timestamp索引是datetime类型
+        # 检查索引是否是datetime类型，如果不是则转换
+        if not pd.api.types.is_datetime64_any_dtype(equity_curve.index):
+            logger.info(f"索引类型不是datetime，当前类型: {equity_curve.index.dtype}，正在转换...")
+            equity_curve.index = pd.to_datetime(equity_curve.index)
+        
+        # 计算时间跨度
         days = (equity_curve.index[-1] - equity_curve.index[0]).days
         years = days / 365.0
+        
+        # 添加日志以便调试
+        logger.info(f"年化收益率计算 - 初始:{equity_curve.index[0]}, 结束:{equity_curve.index[-1]}, 天数:{days}, 年数:{years:.4f}, 初始值:{initial_value:.2f}, 最终值:{final_value:.2f}")
+        
         annual_return = (pow(final_value / initial_value, 1 / years) - 1) * 100 if years > 0 else 0
+        
+        logger.info(f"年化收益率计算结果: {annual_return:.2f}%")
         
         return {
             'total_return': total_return,

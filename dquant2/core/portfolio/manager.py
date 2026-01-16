@@ -37,13 +37,8 @@ class Portfolio:
         # 交易记录
         self.trades: List[Dict] = []
         
-        # 权益曲线
-        self.equity_curve: List[Dict] = [{
-            'timestamp': datetime.now(),
-            'equity': initial_cash,
-            'cash': initial_cash,
-            'positions_value': 0
-        }]
+        # 权益曲线 - 将由回测过程中的record_equity()调用来填充
+        self.equity_curve: List[Dict] = []
         
         # 统计信息
         self.total_commission = 0.0
