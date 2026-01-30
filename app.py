@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from dquant2 import BacktestEngine, BacktestConfig
 from dquant2.stock import StockSelector, StockSelectorConfig
+from dquant2.core.strategy.custom import get_custom_strategy_list, get_custom_strategy_params, reload_custom_strategies
 
 # 页面配置
 st.set_page_config(
@@ -367,13 +368,22 @@ def stock_selection_page():
             
             # 导出功能
             st.subheader("💾 导出结果")
-            csv = results_df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
-                label="📥 下载选股结果 (CSV)",
-                data=csv,
-                file_name=f"selected_stocks_{datetime.today().strftime('%Y%m%d')}.csv",
-                mime="text/csv"
-            )
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                csv = results_df.to_csv(index=False).encode('utf-8-sig')
+                st.download_button(
+                    label="📥 下载选股结果 (CSV)",
+                    data=csv,
+                    file_name=f"selected_stocks_{datetime.today().strftime('%Y%m%d')}.csv",
+                    mime="text/csv"
+                )
+            
+            with col2:
+                if st.button("🔄 传入批量回测"):
+                    # 保存到session state供联动页面使用
+                    st.session_state.selected_stocks = results
+                    st.success(f"✅ 已将 {len(results)} 只股票传入批量回测！请切换到'选股回测联动'页面")
         else:
             st.info("未找到符合条件的股票,请尝试调整筛选条件")
     else:
@@ -466,13 +476,39 @@ def backtest_page():
         # 策略设置
         st.subheader("策略设置")
         
-        # 策略映射：中文显示 -> 英文value
-        strategy_map = {
-            "双均线交叉": "ma_cross"
+        # 内置策略映射
+        builtin_strategy_map = {
+            "双均线交叉": "ma_cross",
+            "RSI策略": "rsi",
+            "MACD策略": "macd",
+            "布林带策略": "bollinger"
         }
-        strategy_display = st.selectbox("策略", list(strategy_map.keys()))
-        strategy_name = strategy_map[strategy_display]
         
+        # 加载自定义策略
+        custom_strategies = get_custom_strategy_list()
+        custom_strategy_map = {
+            f"🔧 {s['display_name']}": s['name'] 
+            for s in custom_strategies
+        }
+        
+        # 合并策略列表
+        all_strategy_map = {**builtin_strategy_map, **custom_strategy_map}
+        
+        # 刷新自定义策略按钮
+        col_strat1, col_strat2 = st.columns([3, 1])
+        with col_strat1:
+            strategy_display = st.selectbox("策略", list(all_strategy_map.keys()))
+        with col_strat2:
+            if st.button("🔄", help="刷新自定义策略列表"):
+                reload_custom_strategies()
+                st.rerun()
+        
+        strategy_name = all_strategy_map[strategy_display]
+        
+        # 检查是否为自定义策略
+        is_custom_strategy = strategy_name in [s['name'] for s in custom_strategies]
+        
+        # 根据策略显示不同参数
         if strategy_name == "ma_cross":
             fast_period = st.slider("快线周期", 3, 30, current_preset["fast"])
             slow_period = st.slider("慢线周期", 10, 60, current_preset["slow"])
@@ -480,6 +516,65 @@ def backtest_page():
                 'fast_period': fast_period,
                 'slow_period': slow_period
             }
+        elif strategy_name == "rsi":
+            rsi_period = st.slider("RSI周期", 7, 21, 14)
+            oversold = st.slider("超卖线", 20, 40, 30)
+            overbought = st.slider("超买线", 60, 80, 70)
+            strategy_params = {
+                'period': rsi_period,
+                'oversold': oversold,
+                'overbought': overbought
+            }
+        elif strategy_name == "macd":
+            macd_fast = st.slider("MACD快线", 8, 16, 12)
+            macd_slow = st.slider("MACD慢线", 20, 32, 26)
+            macd_signal = st.slider("信号线", 6, 12, 9)
+            strategy_params = {
+                'fast_period': macd_fast,
+                'slow_period': macd_slow,
+                'signal_period': macd_signal
+            }
+        elif strategy_name == "bollinger":
+            boll_period = st.slider("布林带周期", 15, 30, 20)
+            std_dev = st.slider("标准差倍数", 1.5, 3.0, 2.0, 0.1)
+            strategy_params = {
+                'period': boll_period,
+                'std_dev': std_dev
+            }
+        elif is_custom_strategy:
+            # 动态渲染自定义策略参数
+            custom_params = get_custom_strategy_params(strategy_name)
+            strategy_params = {}
+            
+            if custom_params:
+                st.caption("📝 自定义策略参数")
+                for param_key, param_def in custom_params.items():
+                    param_name = param_def.get('name', param_key)
+                    param_type = param_def.get('type', 'int')
+                    param_default = param_def.get('default', 0)
+                    param_min = param_def.get('min', 0)
+                    param_max = param_def.get('max', 100)
+                    param_step = param_def.get('step', 1)
+                    param_help = param_def.get('help', '')
+                    
+                    if param_type == 'int':
+                        value = st.slider(
+                            param_name, 
+                            int(param_min), int(param_max), int(param_default), int(param_step),
+                            help=param_help
+                        )
+                    elif param_type == 'float':
+                        value = st.slider(
+                            param_name,
+                            float(param_min), float(param_max), float(param_default), float(param_step),
+                            help=param_help
+                        )
+                    elif param_type == 'bool':
+                        value = st.checkbox(param_name, value=param_default, help=param_help)
+                    else:
+                        value = param_default
+                    
+                    strategy_params[param_key] = value
         else:
             strategy_params = {}
         
@@ -560,6 +655,12 @@ def backtest_page():
                 
                 # 保存结果到session state
                 st.session_state['results'] = results
+                st.session_state['last_config'] = {
+                    'symbol': symbol,
+                    'strategy_name': strategy_name,
+                    'start_date': start_date,
+                    'end_date': end_date
+                }
                 st.success("✅ 回测完成！")
                 
             except Exception as e:
@@ -604,6 +705,33 @@ def backtest_page():
                 "夏普比率",
                 f"{performance['sharpe_ratio']:.2f}"
             )
+        
+        # 添加到对比按钮
+        if 'comparison_results' not in st.session_state:
+            st.session_state.comparison_results = []
+        
+        col_btn1, col_btn2 = st.columns([1, 4])
+        with col_btn1:
+            if st.button("📊 添加到对比"):
+                # 保存到对比列表
+                config = st.session_state.get('last_config', {})
+                comparison_item = {
+                    'config': config,
+                    'metrics': {
+                        'total_return_pct': portfolio['total_return_pct'],
+                        'annual_return': performance['annual_return'] / 100,
+                        'max_drawdown': performance['max_drawdown'] / 100,
+                        'sharpe_ratio': performance['sharpe_ratio'],
+                        'win_rate': performance.get('win_rate', 0) / 100,
+                        'total_trades': portfolio.get('num_trades', 0)
+                    },
+                    'equity_curve': results.get('equity_curve', [])
+                }
+                st.session_state.comparison_results.append(comparison_item)
+                st.success(f"✅ 已添加到对比列表 (共{len(st.session_state.comparison_results)}个)")
+        with col_btn2:
+            if st.session_state.comparison_results:
+                st.caption(f"当前对比列表有 {len(st.session_state.comparison_results)} 个回测结果")
         
         # 详细指标
         st.subheader("📈 详细指标")
@@ -732,6 +860,196 @@ def backtest_page():
         """)
 
 
+def backtest_comparison_page():
+    """回测对比页面"""
+    st.markdown('<h1 class="main-header">📊 回测结果对比</h1>', unsafe_allow_html=True)
+    
+    # 初始化session state
+    if 'comparison_results' not in st.session_state:
+        st.session_state.comparison_results = []
+    
+    st.info("💡 在回测页面运行多个回测后，可以在这里对比结果")
+    
+    if not st.session_state.comparison_results:
+        st.warning("暂无回测结果可对比。请先在回测页面运行回测。")
+        return
+    
+    # 显示对比表格
+    st.subheader("📈 绩效指标对比")
+    
+    comparison_data = []
+    for result in st.session_state.comparison_results:
+        metrics = result.get('metrics', {})
+        config = result.get('config', {})
+        comparison_data.append({
+            '策略': config.get('strategy_name', 'N/A'),
+            '股票': config.get('symbol', 'N/A'),
+            '总收益率': f"{metrics.get('total_return_pct', 0):.2f}%",
+            '年化收益': f"{metrics.get('annual_return', 0) * 100:.2f}%",
+            '夏普比率': f"{metrics.get('sharpe_ratio', 0):.2f}",
+            '最大回撤': f"{metrics.get('max_drawdown', 0) * 100:.2f}%",
+            '胜率': f"{metrics.get('win_rate', 0) * 100:.1f}%",
+            '交易次数': metrics.get('total_trades', 0)
+        })
+    
+    df = pd.DataFrame(comparison_data)
+    st.dataframe(df, use_container_width=True)
+    
+    # 权益曲线对比图
+    if len(st.session_state.comparison_results) >= 2:
+        st.subheader("📉 权益曲线对比")
+        
+        fig = go.Figure()
+        for i, result in enumerate(st.session_state.comparison_results):
+            config = result.get('config', {})
+            equity_curve = result.get('equity_curve', [])
+            if equity_curve:
+                dates = [item['date'] for item in equity_curve]
+                values = [item['equity'] for item in equity_curve]
+                name = f"{config.get('strategy_name', 'N/A')} - {config.get('symbol', 'N/A')}"
+                fig.add_trace(go.Scatter(x=dates, y=values, mode='lines', name=name))
+        
+        fig.update_layout(
+            title='权益曲线对比',
+            xaxis_title='日期',
+            yaxis_title='权益',
+            height=400
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # 清除对比结果
+    if st.button("🗑️ 清除所有对比结果"):
+        st.session_state.comparison_results = []
+        st.rerun()
+
+
+def stock_backtest_workflow_page():
+    """选股回测联动页面"""
+    st.markdown('<h1 class="main-header">🔄 选股回测联动</h1>', unsafe_allow_html=True)
+    
+    # 初始化session state
+    if 'selected_stocks' not in st.session_state:
+        st.session_state.selected_stocks = []
+    if 'workflow_results' not in st.session_state:
+        st.session_state.workflow_results = []
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.subheader("📋 已选股票")
+        
+        if st.session_state.selected_stocks:
+            for i, stock in enumerate(st.session_state.selected_stocks):
+                st.write(f"{i+1}. **{stock['name']}** ({stock['code']}) - ¥{stock.get('price', 'N/A')}")
+            
+            if st.button("🗑️ 清除选股结果"):
+                st.session_state.selected_stocks = []
+                st.rerun()
+        else:
+            st.info("请先在'智能选股'页面筛选股票，结果将自动显示在这里")
+    
+    with col2:
+        st.subheader("⚙️ 批量回测设置")
+        
+        # 使用日期选择器
+        from datetime import date
+        start_date = st.date_input("开始日期", value=date(2023, 1, 1))
+        end_date = st.date_input("结束日期", value=date(2023, 12, 31))
+        
+        strategy_map = {
+            "双均线交叉": "ma_cross",
+            "RSI策略": "rsi",
+            "MACD策略": "macd",
+            "布林带策略": "bollinger"
+        }
+        strategy = st.selectbox("回测策略", list(strategy_map.keys()))
+        initial_cash = st.number_input("初始资金", value=100000, step=10000)
+        
+        if st.button("🚀 批量回测", type="primary", disabled=not st.session_state.selected_stocks):
+            st.session_state.workflow_results = []
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            for i, stock in enumerate(st.session_state.selected_stocks):
+                status_text.text(f"正在回测: {stock['name']} ({stock['code']})")
+                progress_bar.progress((i + 1) / len(st.session_state.selected_stocks))
+                
+                try:
+                    config = BacktestConfig(
+                        symbol=stock['code'].split('.')[1] if '.' in stock['code'] else stock['code'],
+                        start_date=start_date.strftime('%Y%m%d'),
+                        end_date=end_date.strftime('%Y%m%d'),
+                        initial_cash=initial_cash,
+                        strategy_name=strategy_map[strategy],
+                        data_provider='akshare'
+                    )
+                    
+                    engine = BacktestEngine(config)
+                    result = engine.run()
+                    
+                    st.session_state.workflow_results.append({
+                        'stock': stock,
+                        'result': result,
+                        'success': True
+                    })
+                except Exception as e:
+                    st.session_state.workflow_results.append({
+                        'stock': stock,
+                        'error': str(e),
+                        'success': False
+                    })
+            
+            status_text.text("批量回测完成!")
+    
+    # 显示批量回测结果
+    if st.session_state.workflow_results:
+        st.divider()
+        st.subheader("📊 批量回测结果")
+        
+        results_data = []
+        for item in st.session_state.workflow_results:
+            stock = item['stock']
+            if item['success']:
+                result = item['result']
+                portfolio = result.get('portfolio', {})
+                results_data.append({
+                    '股票代码': stock['code'],
+                    '股票名称': stock['name'],
+                    '状态': '✅ 成功',
+                    '总收益率': f"{portfolio.get('total_return_pct', 0):.2f}%",
+                    '最大回撤': f"{portfolio.get('max_drawdown', 0) * 100:.2f}%",
+                    '交易次数': portfolio.get('num_trades', 0)
+                })
+            else:
+                results_data.append({
+                    '股票代码': stock['code'],
+                    '股票名称': stock['name'],
+                    '状态': '❌ 失败',
+                    '总收益率': 'N/A',
+                    '最大回撤': 'N/A',
+                    '交易次数': 'N/A'
+                })
+        
+        df = pd.DataFrame(results_data)
+        st.dataframe(df, use_container_width=True)
+        
+        # 按收益排序
+        successful = [r for r in st.session_state.workflow_results if r['success']]
+        if successful:
+            sorted_results = sorted(
+                successful,
+                key=lambda x: x['result'].get('portfolio', {}).get('total_return_pct', 0),
+                reverse=True
+            )
+            
+            st.subheader("🏆 收益排行榜")
+            for i, item in enumerate(sorted_results[:5]):
+                stock = item['stock']
+                ret = item['result'].get('portfolio', {}).get('total_return_pct', 0)
+                medal = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣"][i]
+                st.write(f"{medal} **{stock['name']}** ({stock['code']}): {ret:.2f}%")
+
+
 def main():
     """主函数 - 页面路由"""
     
@@ -740,7 +1058,7 @@ def main():
         st.title("d-quant2 量化系统")
         page = st.radio(
             "选择功能",
-            ["📈 回测分析", "🔍 智能选股"],
+            ["📈 回测分析", "🔍 智能选股", "📊 回测对比", "🔄 选股回测联动"],
             label_visibility="collapsed"
         )
         st.divider()
@@ -748,9 +1066,14 @@ def main():
     # 根据选择显示对应页面
     if page == "📈 回测分析":
         backtest_page()
-    else:
+    elif page == "🔍 智能选股":
         stock_selection_page()
+    elif page == "📊 回测对比":
+        backtest_comparison_page()
+    else:
+        stock_backtest_workflow_page()
 
 
 if __name__ == '__main__':
     main()
+
