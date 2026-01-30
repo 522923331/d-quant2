@@ -11,6 +11,9 @@ class StockSelectorConfig:
     定义选股的各项条件和参数
     """
     
+    # 数据源选择
+    data_provider: str = 'baostock'  # 'baostock' 或 'akshare'
+    
     # 市场选择
     market: str = 'sh'  # 'sh' 上证, 'sz' 深证
     

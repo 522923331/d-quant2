@@ -249,3 +249,150 @@ class BaostockDataProvider:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """上下文管理器退出"""
         self.logout()
+
+
+class AkShareDataProvider:
+    """AkShare数据提供者
+    
+    使用AkShare作为选股模块的数据源，与回测模块保持一致
+    """
+    
+    def __init__(self):
+        """初始化AkShare"""
+        try:
+            import akshare as ak
+            self.ak = ak
+        except ImportError:
+            logger.error("请安装 akshare: pip install akshare")
+            raise
+        
+        self.stock_name_map: Dict[str, str] = {}
+        self._cache: Dict[str, pd.DataFrame] = {}
+    
+    def login(self) -> bool:
+        """登录（AkShare不需要登录，保持接口一致）"""
+        logger.info("AkShare 初始化成功")
+        return True
+    
+    def logout(self):
+        """登出（AkShare不需要登出，保持接口一致）"""
+        pass
+    
+    def load_stock_names(self) -> bool:
+        """加载股票名称映射"""
+        try:
+            df = self.ak.stock_zh_a_spot_em()
+            for _, row in df.iterrows():
+                self.stock_name_map[row['代码']] = row['名称']
+            logger.info(f"AkShare: 加载{len(self.stock_name_map)}只股票信息")
+            return True
+        except Exception as e:
+            logger.error(f"AkShare加载股票名称异常: {e}")
+            return False
+    
+    def get_stock_list(self, market: str = 'sh') -> List[str]:
+        """获取指定市场的股票列表"""
+        try:
+            df = self.ak.stock_zh_a_spot_em()
+            all_stocks = []
+            
+            for _, row in df.iterrows():
+                code = row['代码']
+                # 上证: 6开头, 深证: 0/3开头
+                if market == 'sh' and code.startswith('6'):
+                    all_stocks.append(code)
+                elif market == 'sz' and (code.startswith('0') or code.startswith('3')):
+                    all_stocks.append(code)
+            
+            logger.info(f"AkShare: 获取{market}市场{len(all_stocks)}只股票")
+            return all_stocks
+        except Exception as e:
+            logger.error(f"AkShare获取股票列表异常: {e}")
+            return []
+    
+    def get_stock_data(
+        self, 
+        stock_code: str, 
+        start_date: str, 
+        end_date: str,
+        retries: int = 3
+    ) -> pd.DataFrame:
+        """获取股票历史数据"""
+        # 检查缓存
+        cache_key = f"{stock_code}_{start_date}_{end_date}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+        
+        for attempt in range(retries):
+            try:
+                # 转换日期格式
+                start_fmt = start_date.replace('-', '')
+                end_fmt = end_date.replace('-', '')
+                
+                df = self.ak.stock_zh_a_hist(
+                    symbol=stock_code,
+                    start_date=start_fmt,
+                    end_date=end_fmt,
+                    adjust="qfq"
+                )
+                
+                if df.empty:
+                    return pd.DataFrame()
+                
+                # 标准化列名
+                df = df.rename(columns={
+                    '日期': 'date',
+                    '开盘': 'open',
+                    '最高': 'high',
+                    '最低': 'low',
+                    '收盘': 'close',
+                    '成交量': 'volume',
+                    '成交额': 'amount',
+                    '换手率': 'turnover',
+                    '涨跌幅': 'pct_chg'
+                })
+                
+                # 缓存
+                self._cache[cache_key] = df
+                return df
+                
+            except Exception as e:
+                if attempt < retries - 1:
+                    logger.warning(f"AkShare获取{stock_code}数据失败，重试 {attempt+1}/{retries}: {e}")
+                    import time
+                    time.sleep(0.5)
+                else:
+                    logger.error(f"AkShare获取{stock_code}数据最终失败: {e}")
+                    return pd.DataFrame()
+        
+        return pd.DataFrame()
+    
+    def get_stock_name(self, stock_code: str) -> str:
+        """获取股票名称"""
+        return self.stock_name_map.get(stock_code, stock_code)
+    
+    def __enter__(self):
+        """上下文管理器进入"""
+        self.login()
+        self.load_stock_names()
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """上下文管理器退出"""
+        self.logout()
+
+
+def create_data_provider(provider_name: str = 'baostock'):
+    """创建数据提供者工厂函数
+    
+    Args:
+        provider_name: 数据源名称，'baostock' 或 'akshare'
+        
+    Returns:
+        数据提供者实例
+    """
+    if provider_name.lower() == 'akshare':
+        return AkShareDataProvider()
+    else:
+        return BaostockDataProvider()
+

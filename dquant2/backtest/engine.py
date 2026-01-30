@@ -13,7 +13,7 @@ from dquant2.core.event_bus.events import (
     MarketDataEvent, SignalEvent, OrderEvent, FillEvent
 )
 from dquant2.core.data import DataManager
-from dquant2.core.data.providers import MockDataProvider, AkShareProvider
+from dquant2.core.data.providers import MockDataProvider, AkShareProvider, BaostockProvider
 from dquant2.core.strategy import StrategyFactory
 from dquant2.core.risk import RiskManager
 from dquant2.core.risk.manager import MaxPositionControl, CashControl
@@ -100,6 +100,8 @@ class BacktestEngine:
             return MockDataProvider()
         elif provider_name == 'akshare':
             return AkShareProvider()
+        elif provider_name == 'baostock':
+            return BaostockProvider()
         else:
             raise ValueError(f"未知的数据提供者: {provider_name}")
 

@@ -9,7 +9,7 @@ from typing import List, Dict, Tuple, Callable, Optional
 import logging
 
 from .config import StockSelectorConfig
-from .data_provider import BaostockDataProvider
+from .data_provider import BaostockDataProvider, AkShareDataProvider, create_data_provider
 from .indicators import (
     calculate_macd,
     calculate_kdj,
@@ -38,7 +38,9 @@ class StockSelector:
             config: 选股配置
         """
         self.config = config
-        self.data_provider = BaostockDataProvider()
+        # 使用配置的数据源
+        self.data_provider = create_data_provider(config.data_provider)
+        logger.info(f"选股器使用数据源: {config.data_provider}")
         self.progress_callback: Optional[Callable] = None
         self.stop_flag = False
     

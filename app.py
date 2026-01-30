@@ -218,6 +218,42 @@ def stock_selection_page():
     with st.sidebar:
         st.header("⚙️ 选股配置")
         
+        # 数据源设置
+        st.subheader("数据源设置")
+        stock_data_provider_map = {
+            "AkShare (推荐)": "akshare",
+            "Baostock": "baostock"
+        }
+        
+        # 从session state获取默认值（用于同步）
+        default_idx = 0  # 默认AkShare
+        if 'stock_data_provider' in st.session_state:
+            current = st.session_state.stock_data_provider
+            for i, (_, v) in enumerate(stock_data_provider_map.items()):
+                if v == current:
+                    default_idx = i
+                    break
+        
+        stock_data_provider_display = st.selectbox(
+            "数据源", 
+            list(stock_data_provider_map.keys()),
+            index=default_idx,
+            help="建议选择与回测相同的数据源以保持数据一致性"
+        )
+        stock_data_provider = stock_data_provider_map[stock_data_provider_display]
+        
+        # 保存到session state
+        st.session_state.stock_data_provider = stock_data_provider
+        
+        # 检查与回测模块数据源是否一致
+        backtest_provider = st.session_state.get('backtest_data_provider', 'akshare')
+        if backtest_provider != 'mock' and stock_data_provider != backtest_provider:
+            st.warning(f"⚠️ 选股数据源({stock_data_provider})与回测数据源({backtest_provider})不一致")
+            if st.button("🔄 同步到回测模块", key="sync_to_backtest"):
+                st.session_state.backtest_data_provider = stock_data_provider
+                st.success(f"✅ 已同步！回测模块现在也使用 {stock_data_provider}")
+                st.rerun()
+        
         # 基本设置
         st.subheader("基本设置")
         market = st.selectbox("市场", ["上证(sh)", "深证(sz)"])
@@ -276,6 +312,7 @@ def stock_selection_page():
         
         # 创建配置
         config = StockSelectorConfig(
+            data_provider=stock_data_provider,
             market=market_code,
             max_stocks=max_stocks,
             use_macd=use_macd,
@@ -468,10 +505,33 @@ def backtest_page():
         # 数据源映射：中文显示 -> 英文value
         data_provider_map = {
             "模拟数据": "mock",
-            "真实数据(AkShare)": "akshare"
+            "AkShare (真实数据)": "akshare",
+            "Baostock (真实数据)": "baostock"
         }
-        data_provider_display = st.selectbox("数据源", list(data_provider_map.keys()))
+        
+        # 从session state获取默认值（用于同步）
+        default_idx = 1  # 默认AkShare
+        if 'backtest_data_provider' in st.session_state:
+            current = st.session_state.backtest_data_provider
+            for i, (_, v) in enumerate(data_provider_map.items()):
+                if v == current:
+                    default_idx = i
+                    break
+        
+        data_provider_display = st.selectbox("数据源", list(data_provider_map.keys()), index=default_idx)
         data_provider = data_provider_map[data_provider_display]
+        
+        # 保存到session state
+        st.session_state.backtest_data_provider = data_provider
+        
+        # 检查与选股模块数据源是否一致
+        stock_provider = st.session_state.get('stock_data_provider', 'baostock')
+        if data_provider != 'mock' and data_provider != stock_provider:
+            st.warning(f"⚠️ 回测数据源({data_provider})与选股数据源({stock_provider})不一致")
+            if st.button("🔄 同步到选股模块", key="sync_to_stock"):
+                st.session_state.stock_data_provider = data_provider
+                st.success(f"✅ 已同步！选股模块现在也使用 {data_provider}")
+                st.rerun()
         
         # 策略设置
         st.subheader("策略设置")
