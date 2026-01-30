@@ -102,6 +102,11 @@ class StockSelector:
                     break
                 
                 stock_name = self.data_provider.get_stock_name(stock_code)
+                
+                # 过滤异常股票（ST、停牌等）
+                if not self._is_valid_stock(stock_code, stock_name):
+                    continue
+                
                 self._notify_progress(
                     f"检查 {stock_name}({stock_code})",
                     i + 1,
@@ -126,6 +131,35 @@ class StockSelector:
             
         finally:
             self.data_provider.logout()
+    
+    def _is_valid_stock(self, stock_code: str, stock_name: str) -> bool:
+        """过滤异常股票
+        
+        过滤掉ST股票、停牌股票、新股等不适合交易的股票
+        
+        Args:
+            stock_code: 股票代码
+            stock_name: 股票名称
+            
+        Returns:
+            是否为有效股票
+        """
+        # 排除ST股票（包括ST、*ST、S*ST等）
+        if 'ST' in stock_name.upper() or 'S*' in stock_name.upper():
+            logger.debug(f"跳过ST股票: {stock_name}({stock_code})")
+            return False
+        
+        # 排除退市整理期股票
+        if '退' in stock_name:
+            logger.debug(f"跳过退市整理期股票: {stock_name}({stock_code})")
+            return False
+        
+        # 排除创业板和科创板（可选，这些板块波动较大）
+        # 创业板: 300xxx, 科创板: 688xxx
+        # if stock_code.startswith('300') or stock_code.startswith('688'):
+        #     return False
+        
+        return True
     
     def _check_stock(self, stock_code: str) -> Optional[Dict]:
         """检查单只股票是否符合条件
@@ -308,6 +342,35 @@ class StockSelector:
             conditions.append(cond)
             details.append(f"换手率({turnover:.2f}%): {'通过' if cond else '未通过'}")
         
+        # 基本面指标条件（需要获取额外数据）
+        if any([self.config.use_pe_ratio, self.config.use_pb_ratio, 
+                self.config.use_roe, self.config.use_net_profit_margin]):
+            fundamental_data = self._get_fundamental_data(df)
+            
+            if self.config.use_pe_ratio and fundamental_data.get('pe_ratio') is not None:
+                pe = fundamental_data['pe_ratio']
+                cond = pe < self.config.max_pe_ratio and pe > 0  # PE需要大于0（盈利）
+                conditions.append(cond)
+                details.append(f"市盈率(PE={pe:.1f}<{self.config.max_pe_ratio}): {'通过' if cond else '未通过'}")
+            
+            if self.config.use_pb_ratio and fundamental_data.get('pb_ratio') is not None:
+                pb = fundamental_data['pb_ratio']
+                cond = pb < self.config.max_pb_ratio and pb > 0
+                conditions.append(cond)
+                details.append(f"市净率(PB={pb:.1f}<{self.config.max_pb_ratio}): {'通过' if cond else '未通过'}")
+            
+            if self.config.use_roe and fundamental_data.get('roe') is not None:
+                roe = fundamental_data['roe']
+                cond = roe > self.config.min_roe
+                conditions.append(cond)
+                details.append(f"ROE({roe:.1f}%>{self.config.min_roe}%): {'通过' if cond else '未通过'}")
+            
+            if self.config.use_net_profit_margin and fundamental_data.get('net_profit_margin') is not None:
+                npm = fundamental_data['net_profit_margin']
+                cond = npm > self.config.min_net_profit_margin
+                conditions.append(cond)
+                details.append(f"净利率({npm:.1f}%>{self.config.min_net_profit_margin}%): {'通过' if cond else '未通过'}")
+        
         # 如果没有启用任何条件,返回False
         if not conditions:
             return False, ["未启用任何筛选条件"]
@@ -315,3 +378,43 @@ class StockSelector:
         # 所有条件都满足才通过
         all_met = all(conditions)
         return all_met, details
+    
+    def _get_fundamental_data(self, df: pd.DataFrame) -> Dict:
+        """获取基本面数据
+        
+        从数据框中提取或计算基本面指标
+        注意：baostock的基本面数据可能需要额外API调用
+        这里提供一个简化实现，实际可通过data_provider获取
+        
+        Returns:
+            包含PE、PB、ROE等基本面数据的字典
+        """
+        result = {}
+        
+        # 如果数据框中包含这些列，直接使用
+        if 'peTTM' in df.columns:
+            try:
+                result['pe_ratio'] = float(df['peTTM'].iloc[-1])
+            except:
+                pass
+        
+        if 'pbMRQ' in df.columns:
+            try:
+                result['pb_ratio'] = float(df['pbMRQ'].iloc[-1])
+            except:
+                pass
+        
+        if 'roeAvg' in df.columns:
+            try:
+                result['roe'] = float(df['roeAvg'].iloc[-1])
+            except:
+                pass
+        
+        if 'netProfitMargin' in df.columns:
+            try:
+                result['net_profit_margin'] = float(df['netProfitMargin'].iloc[-1])
+            except:
+                pass
+        
+        return result
+

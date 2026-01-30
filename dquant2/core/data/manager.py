@@ -96,9 +96,9 @@ class DataManager:
         # 数据预处理
         data = data.copy()
         
-        # 填充缺失值
-        data.fillna(method='ffill', inplace=True)
-        data.fillna(method='bfill', inplace=True)
+        # 填充缺失值 (使用 pandas 2.0+ 方法)
+        data.ffill(inplace=True)
+        data.bfill(inplace=True)
         
         # 确保数据按日期排序
         data.sort_index(inplace=True)

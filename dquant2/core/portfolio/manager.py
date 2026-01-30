@@ -119,8 +119,8 @@ class Portfolio:
             )
             return
         
-        # 计算实现盈亏
-        realized = position.reduce_quantity(fill.quantity)
+        # 计算实现盈亏，使用实际成交价格
+        realized = position.reduce_quantity(fill.quantity, sell_price=fill.price)
         self.realized_pnl += realized
         
         # 增加现金

@@ -109,3 +109,119 @@ class CashControl(BaseRiskControl):
             return False, msg
         
         return True, ""
+
+
+class StopLossControl(BaseRiskControl):
+    """止损控制
+    
+    当持仓亏损达到指定比例时触发止损
+    """
+    
+    def __init__(self, stop_loss_pct: float = 0.05):
+        """初始化止损控制
+        
+        Args:
+            stop_loss_pct: 止损比例，默认5%
+        """
+        super().__init__("StopLoss")
+        self.stop_loss_pct = stop_loss_pct
+    
+    def check(self, order: OrderEvent, portfolio) -> tuple:
+        # 止损控制主要用于检查现有持仓是否需要平仓
+        # 这里只是拦截买入订单以防止在亏损状态下加仓
+        if order.direction != 'BUY':
+            return True, ""
+        
+        # 检查该标的是否有持仓且正在亏损
+        position = portfolio.get_position(order.symbol)
+        if position and position.quantity > 0:
+            loss_pct = position.unrealized_pnl_pct
+            if loss_pct < -self.stop_loss_pct:
+                msg = f"持仓亏损 {loss_pct:.2%} 超过止损线 {-self.stop_loss_pct:.2%}，禁止加仓"
+                self.record_violation(msg)
+                return False, msg
+        
+        return True, ""
+    
+    def should_close_position(self, position) -> bool:
+        """判断是否应该平仓止损
+        
+        Args:
+            position: Position对象
+            
+        Returns:
+            是否应该止损平仓
+        """
+        if position and position.quantity > 0:
+            return position.unrealized_pnl_pct < -self.stop_loss_pct
+        return False
+
+
+class TakeProfitControl(BaseRiskControl):
+    """止盈控制
+    
+    当持仓盈利达到指定比例时提示止盈
+    """
+    
+    def __init__(self, take_profit_pct: float = 0.15):
+        """初始化止盈控制
+        
+        Args:
+            take_profit_pct: 止盈比例，默认15%
+        """
+        super().__init__("TakeProfit")
+        self.take_profit_pct = take_profit_pct
+    
+    def check(self, order: OrderEvent, portfolio) -> tuple:
+        # 止盈控制不拦截订单，只记录提示
+        return True, ""
+    
+    def should_close_position(self, position) -> bool:
+        """判断是否应该止盈平仓
+        
+        Args:
+            position: Position对象
+            
+        Returns:
+            是否应该止盈平仓
+        """
+        if position and position.quantity > 0:
+            return position.unrealized_pnl_pct > self.take_profit_pct
+        return False
+
+
+class MaxDrawdownControl(BaseRiskControl):
+    """最大回撤控制
+    
+    当组合回撤超过指定比例时停止交易
+    """
+    
+    def __init__(self, max_drawdown_pct: float = 0.20):
+        """初始化最大回撤控制
+        
+        Args:
+            max_drawdown_pct: 最大回撤比例，默认20%
+        """
+        super().__init__("MaxDrawdown")
+        self.max_drawdown_pct = max_drawdown_pct
+        self.peak_value = 0.0
+    
+    def check(self, order: OrderEvent, portfolio) -> tuple:
+        current_value = portfolio.get_total_value()
+        
+        # 更新峰值
+        if current_value > self.peak_value:
+            self.peak_value = current_value
+        
+        # 计算回撤
+        if self.peak_value > 0:
+            drawdown = (self.peak_value - current_value) / self.peak_value
+            
+            if drawdown > self.max_drawdown_pct:
+                msg = f"当前回撤 {drawdown:.2%} 超过最大限制 {self.max_drawdown_pct:.2%}，禁止开新仓"
+                self.record_violation(msg)
+                if order.direction == 'BUY':
+                    return False, msg
+        
+        return True, ""
+

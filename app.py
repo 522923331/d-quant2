@@ -408,11 +408,48 @@ def backtest_page():
     with st.sidebar:
         st.header("⚙️ 回测配置")
         
+        # 快速配置预设
+        preset = st.selectbox(
+            "快速配置",
+            ["自定义", "稳健型", "均衡型", "进取型"],
+            help="选择预设配置快速开始，或选择'自定义'手动调整参数"
+        )
+        
+        # 根据预设设置默认值
+        presets = {
+            "稳健型": {"fast": 10, "slow": 30, "ratio": 0.15, "stop_loss": 0.03, "take_profit": 0.10},
+            "均衡型": {"fast": 5, "slow": 20, "ratio": 0.25, "stop_loss": 0.05, "take_profit": 0.15},
+            "进取型": {"fast": 3, "slow": 10, "ratio": 0.40, "stop_loss": 0.08, "take_profit": 0.25},
+            "自定义": {"fast": 5, "slow": 20, "ratio": 0.20, "stop_loss": 0.05, "take_profit": 0.15}
+        }
+        current_preset = presets[preset]
+        
         # 基本参数
         st.subheader("基本设置")
         symbol = st.text_input("股票代码", "000001")
-        start_date = st.text_input("开始日期 (YYYYMMDD)", "20200101")
-        end_date = st.text_input("结束日期 (YYYYMMDD)", "20231231")
+        
+        # 使用日期选择器替代文本输入
+        from datetime import date, datetime
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date_input = st.date_input(
+                "开始日期",
+                value=date(2020, 1, 1),
+                min_value=date(2010, 1, 1),
+                max_value=date.today()
+            )
+        with col2:
+            end_date_input = st.date_input(
+                "结束日期",
+                value=date(2023, 12, 31),
+                min_value=date(2010, 1, 1),
+                max_value=date.today()
+            )
+        
+        # 转换日期格式为 YYYYMMDD
+        start_date = start_date_input.strftime("%Y%m%d")
+        end_date = end_date_input.strftime("%Y%m%d")
+        
         initial_cash = st.number_input("初始资金 (¥)", min_value=10000, value=1000000, step=10000)
         
         # 数据源
@@ -437,8 +474,8 @@ def backtest_page():
         strategy_name = strategy_map[strategy_display]
         
         if strategy_name == "ma_cross":
-            fast_period = st.slider("快线周期", 3, 30, 5)
-            slow_period = st.slider("慢线周期", 10, 60, 20)
+            fast_period = st.slider("快线周期", 3, 30, current_preset["fast"])
+            slow_period = st.slider("慢线周期", 10, 60, current_preset["slow"])
             strategy_params = {
                 'fast_period': fast_period,
                 'slow_period': slow_period
@@ -458,7 +495,7 @@ def backtest_page():
         capital_strategy = capital_map[capital_display]
         
         if capital_strategy == "fixed_ratio":
-            ratio = st.slider("投资比例", 0.05, 1.0, 0.2, 0.05)
+            ratio = st.slider("投资比例", 0.05, 1.0, current_preset["ratio"], 0.05)
             capital_params = {'ratio': ratio}
         else:  # kelly
             win_rate = st.slider("胜率", 0.3, 0.8, 0.55, 0.05)
@@ -476,6 +513,23 @@ def backtest_page():
         # 风控
         st.subheader("风控设置")
         max_position_ratio = st.slider("最大持仓比例", 0.1, 1.0, 0.5, 0.1)
+        
+        # 新增止损止盈设置
+        with st.expander("🛡️ 止损止盈设置"):
+            stop_loss_pct = st.slider(
+                "止损比例", 
+                0.01, 0.20, 
+                current_preset["stop_loss"], 
+                0.01,
+                help="当持仓亏损达到此比例时禁止加仓"
+            )
+            take_profit_pct = st.slider(
+                "止盈比例", 
+                0.05, 0.50, 
+                current_preset["take_profit"], 
+                0.05,
+                help="当持仓盈利达到此比例时考虑卖出"
+            )
         
         # 运行按钮
         run_backtest = st.button("🚀 运行回测", type="primary", use_container_width=True)

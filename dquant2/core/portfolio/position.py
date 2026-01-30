@@ -51,12 +51,22 @@ class Position:
         if self.quantity > 0:
             self.avg_price = total_cost / self.quantity
     
-    def reduce_quantity(self, quantity: int) -> float:
-        """减少持仓，返回实现盈亏"""
+    def reduce_quantity(self, quantity: int, sell_price: float = None) -> float:
+        """减少持仓，返回实现盈亏
+        
+        Args:
+            quantity: 减少数量
+            sell_price: 卖出价格，如果不提供则使用当前价格
+            
+        Returns:
+            实现盈亏
+        """
         if quantity > self.quantity:
             raise ValueError(f"卖出数量 {quantity} 超过持仓 {self.quantity}")
         
-        realized_pnl = quantity * (self.current_price - self.avg_price)
+        # 使用提供的卖出价格或当前价格
+        price = sell_price if sell_price is not None else self.current_price
+        realized_pnl = quantity * (price - self.avg_price)
         self.quantity -= quantity
         
         return realized_pnl
