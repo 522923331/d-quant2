@@ -95,7 +95,58 @@ class StockSelector:
                 self._notify_progress("未找到股票")
                 return []
             
-            self._notify_progress(f"开始筛选{self.config.market.upper()}市场{len(stock_list)}只股票...")
+            self._notify_progress(f"获取{self.config.market.upper()}市场{len(stock_list)}只股票基础信息...")
+            
+            # --- 新增步骤：获取基础信息进行初筛 ---
+            basics_df = pd.DataFrame()
+            if hasattr(self.data_provider, 'get_stock_basics'):
+                basics_df = self.data_provider.get_stock_basics()
+            
+            filtered_stock_list = []
+            
+            # 如果有基础信息，进行市值和成交量初筛
+            if not basics_df.empty and (self.config.use_market_cap or self.config.use_volume_absolute):
+                self._notify_progress("正在进行市值和成交量初筛...")
+                for code in stock_list:
+                    # 查找对应信息
+                    row = basics_df[basics_df['code'] == code]
+                    if row.empty:
+                        # 如果没找到信息，默认保留（或者可以选择跳过）
+                        filtered_stock_list.append(code)
+                        continue
+                    
+                    row = row.iloc[0]
+                    keep = True
+                    
+                    # 市值筛选
+                    if self.config.use_market_cap:
+                         try:
+                             mcap = float(row.get('market_cap', 0))
+                             if mcap > 0 and (mcap < self.config.min_market_cap or mcap > self.config.max_market_cap):
+                                 keep = False
+                         except:
+                             pass
+                    
+                    # 成交量筛选
+                    if keep and self.config.use_volume_absolute:
+                        try:
+                            vol = float(row.get('volume', 0))
+                            if vol > 0 and (vol < self.config.min_volume or vol > self.config.max_volume):
+                                keep = False
+                        except:
+                            pass
+                    
+                    if keep:
+                        filtered_stock_list.append(code)
+                
+                self._notify_progress(f"初筛后剩余 {len(filtered_stock_list)} 只股票 (原 {len(stock_list)} 只)")
+                stock_list = filtered_stock_list
+            else:
+                 if self.config.use_market_cap or self.config.use_volume_absolute:
+                     self._notify_progress("⚠️ 警告: 当前数据源无法获取市值/成交量信息，跳过初筛", 0, 0)
+
+            
+            self._notify_progress(f"开始深度筛选剩余 {len(stock_list)} 只股票...")
             
             # 逐个检查股票
             for i, stock_code in enumerate(stock_list):

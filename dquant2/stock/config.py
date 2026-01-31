@@ -65,6 +65,15 @@ class StockSelectorConfig:
     
     use_quick_ratio: bool = False  # 速动比率
     min_quick_ratio: float = 1.0
+
+    # 市值和成交量筛选 (New)
+    use_market_cap: bool = False
+    min_market_cap: float = 0.0  # 最小市值（亿元）
+    max_market_cap: float = 1000.0  # 最大市值（亿元）
+
+    use_volume_absolute: bool = False
+    min_volume: float = 10000.0  # 最小成交量（手）
+    max_volume: float = 10000000.0  # 最大成交量（手）
     
     # 数据源设置
     data_source: str = 'baostock'  # 数据源
@@ -125,6 +134,10 @@ class StockSelectorConfig:
             conditions.append(f"流动比率 > {self.min_current_ratio}")
         if self.use_quick_ratio:
             conditions.append(f"速动比率 > {self.min_quick_ratio}")
+        if self.use_market_cap:
+            conditions.append(f"市值 {self.min_market_cap}-{self.max_market_cap}亿")
+        if self.use_volume_absolute:
+            conditions.append(f"成交量 {self.min_volume/10000:.1f}万-{self.max_volume/10000:.1f}万手")
         return conditions
     
     def to_dict(self) -> dict:

@@ -229,6 +229,39 @@ class BaostockDataProvider:
             logger.warning(f"获取{stock_code}基本面数据异常: {e}")
             return pd.DataFrame()
     
+    
+    def get_stock_basics(self) -> pd.DataFrame:
+        """获取所有股票的基础信息（市值、成交量等）
+        
+        Note: Baostock 不直接提供总市值数据，这里仅返回代码和名称
+        实际选股时，如果需要市值筛选，建议使用 AkShare
+        """
+        if not self.is_logged_in:
+            if not self.login():
+                return pd.DataFrame()
+        
+        try:
+            # Baostock的query_stock_basic只包含基本上市信息
+            rs = bs.query_stock_basic(code_name="")
+            data_list = []
+            while rs.next():
+                row = rs.get_row_data()
+                # code, code_name, ipoDate, outDate, type, status
+                if row[5] == '1': # 在上市
+                    code = row[0].split('.')[1]
+                    name = row[1]
+                    data_list.append({
+                        'code': code,
+                        'name': name,
+                        'market_cap': None,  # Baostock暂不支持直接获取市值
+                        'volume': None       # 也不支持获取当日成交量
+                    })
+            
+            return pd.DataFrame(data_list)
+        except Exception as e:
+            logger.error(f"Baostock获取基础信息失败: {e}")
+            return pd.DataFrame()
+
     def get_stock_name(self, stock_code: str) -> str:
         """获取股票名称
         
@@ -318,7 +351,16 @@ class AkShareDataProvider:
         retries: int = 3
     ) -> pd.DataFrame:
         """获取股票历史数据"""
-        # 检查缓存
+        # 检查Parquet缓存
+        from dquant2.core.data.cache import ParquetCache
+        cache = ParquetCache()
+        
+        # 尝试从缓存加载（只加载符合日期范围的数据）
+        cached_df = cache.load(stock_code, start_date, end_date)
+        if cached_df is not None:
+            return cached_df
+        
+        # 内存缓存（仅作为二级缓存）
         cache_key = f"{stock_code}_{start_date}_{end_date}"
         if cache_key in self._cache:
             return self._cache[cache_key]
@@ -352,7 +394,14 @@ class AkShareDataProvider:
                     '涨跌幅': 'pct_chg'
                 })
                 
-                # 缓存
+                # 设置日期索引
+                df['date'] = pd.to_datetime(df['date'])
+                df.set_index('date', inplace=True)
+                
+                # 保存到 Parquet 缓存
+                cache.save(stock_code, df)
+                
+                # 内存缓存
                 self._cache[cache_key] = df
                 return df
                 
@@ -367,6 +416,43 @@ class AkShareDataProvider:
         
         return pd.DataFrame()
     
+    
+    def get_stock_basics(self) -> pd.DataFrame:
+        """获取所有股票的基础信息（市值、成交量等）"""
+        try:
+            df = self.ak.stock_zh_a_spot_em()
+            # akshare返回列可能包含: 代码, 名称, 最新价, 涨跌幅, ..., 成交量, 成交额, ..., 总市值
+            
+            basics = []
+            for _, row in df.iterrows():
+                try:
+                    # 总市值通常单位为元，需转为亿元
+                    # 列名可能是 '总市值' 或 '总市值(元)'，需检查，这里假设为 '总市值'
+                    market_cap_raw = row.get('总市值')
+                    if market_cap_raw:
+                         market_cap = float(market_cap_raw) / 100000000
+                    else:
+                        market_cap = 0
+                except:
+                    market_cap = 0
+                
+                try:
+                    volume = float(row['成交量'])  # 手
+                except:
+                    volume = 0
+                
+                basics.append({
+                    'code': str(row['代码']),
+                    'name': str(row['名称']),
+                    'market_cap': market_cap,
+                    'volume': volume
+                })
+            
+            return pd.DataFrame(basics)
+        except Exception as e:
+            logger.error(f"AkShare获取基础信息失败: {e}")
+            return pd.DataFrame()
+
     def get_stock_name(self, stock_code: str) -> str:
         """获取股票名称"""
         return self.stock_name_map.get(stock_code, stock_code)

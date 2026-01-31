@@ -294,6 +294,32 @@ def stock_selection_page():
         else:
             min_turnover, max_turnover = 3.0, 12.0
         
+        # 市值与成交量
+        st.subheader("市值与成交量")
+        use_market_cap = st.checkbox("市值范围 (亿)", value=False)
+        if use_market_cap:
+            col1, col2 = st.columns(2)
+            with col1:
+                min_mcap = st.number_input("最小市值", value=0.0, step=10.0)
+            with col2:
+                max_mcap = st.number_input("最大市值", value=1000.0, step=100.0)
+        else:
+            min_mcap, max_mcap = 0.0, 1000.0
+            
+        use_volume_absolute = st.checkbox("成交量范围 (万手)", value=False)
+        if use_volume_absolute:
+            col1, col2 = st.columns(2)
+            with col1:
+                min_vol = st.number_input("最小成交量", value=1.0, step=1.0) # 1万手
+            with col2:
+                max_vol = st.number_input("最大成交量", value=1000.0, step=100.0) # 1000万手
+            
+            # 转换为手
+            min_volume = min_vol * 10000
+            max_volume = max_vol * 10000
+        else:
+            min_volume, max_volume = 10000.0, 10000000.0
+        
         # 基本面指标(可选)
         with st.expander("📊 基本面指标(可选)"):
             use_pe_ratio = st.checkbox("市盈率 < 20", value=False)
@@ -330,6 +356,14 @@ def stock_selection_page():
             use_turnover=use_turnover,
             min_turnover=min_turnover,
             max_turnover=max_turnover,
+            # 新增参数
+            use_market_cap=use_market_cap,
+            min_market_cap=min_mcap,
+            max_market_cap=max_mcap,
+            use_volume_absolute=use_volume_absolute,
+            min_volume=min_volume,
+            max_volume=max_volume,
+            # 基本面
             use_pe_ratio=use_pe_ratio,
             use_pb_ratio=use_pb_ratio,
             use_roe=use_roe,
@@ -476,21 +510,56 @@ def backtest_page():
         symbol = st.text_input("股票代码", "000001")
         
         # 使用日期选择器替代文本输入
-        from datetime import date, datetime
+        from datetime import date, datetime, timedelta
+        
+        # 定义日期回调
+        def update_dates():
+            preset = st.session_state.date_range_preset
+            today = date.today()
+            if preset == "近1年":
+                st.session_state.start_date = today - timedelta(days=365)
+                st.session_state.end_date = today
+            elif preset == "近3年":
+                st.session_state.start_date = today - timedelta(days=365*3)
+                st.session_state.end_date = today
+            elif preset == "近5年":
+                st.session_state.start_date = today - timedelta(days=365*5)
+                st.session_state.end_date = today
+            elif preset == "今年以来":
+                st.session_state.start_date = date(today.year, 1, 1)
+                st.session_state.end_date = today
+        
+        # 初始化日期session state
+        if 'start_date' not in st.session_state:
+            st.session_state.start_date = date(2020, 1, 1)
+        if 'end_date' not in st.session_state:
+            st.session_state.end_date = date(2023, 12, 31)
+
+        # 日期范围预设
+        st.selectbox(
+            "时间范围预设",
+            ["自定义", "近1年", "近3年", "近5年", "今年以来"],
+            key="date_range_preset",
+            on_change=update_dates,
+            help="选择预设时间段会自动更新下方的开始和结束日期"
+        )
+
         col1, col2 = st.columns(2)
         with col1:
             start_date_input = st.date_input(
                 "开始日期",
-                value=date(2020, 1, 1),
+                value=st.session_state.start_date,
                 min_value=date(2010, 1, 1),
-                max_value=date.today()
+                max_value=date.today(),
+                key="start_date"
             )
         with col2:
             end_date_input = st.date_input(
                 "结束日期",
-                value=date(2023, 12, 31),
+                value=st.session_state.end_date,
                 min_value=date(2010, 1, 1),
-                max_value=date.today()
+                max_value=date.today(),
+                key="end_date"
             )
         
         # 转换日期格式为 YYYYMMDD

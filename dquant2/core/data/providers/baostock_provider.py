@@ -64,7 +64,16 @@ class BaostockProvider(BaseDataProvider):
         freq: str = 'd'
     ) -> pd.DataFrame:
         """获取K线数据"""
-        # 检查缓存
+        # 检查Parquet缓存
+        from dquant2.core.data.cache import ParquetCache
+        cache = ParquetCache()
+        
+        # 尝试从缓存加载
+        cached_df = cache.load(symbol, start, end)
+        if cached_df is not None:
+            return cached_df
+        
+        # 内存缓存
         cache_key = self._get_cache_key(symbol, start, end, freq)
         cached = self._use_cache(cache_key)
         if cached is not None:
@@ -126,6 +135,9 @@ class BaostockProvider(BaseDataProvider):
             
             # 只保留必需列
             df = df[['open', 'high', 'low', 'close', 'volume']]
+            
+            # 保存到 Parquet 缓存
+            cache.save(symbol, df)
             
             # 缓存
             self._set_cache(cache_key, df)
