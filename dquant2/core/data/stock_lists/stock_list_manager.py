@@ -82,7 +82,7 @@ class StockListManager:
                         reader = csv.reader(f)
                         for row in reader:
                             if len(row) >= 2:
-                                code = row[0].strip()
+                                code = row[0].strip().lstrip('\ufeff')
                                 name = row[1].strip()
                                 
                                 # 验证代码格式（需要包含交易所后缀）
@@ -245,3 +245,55 @@ class StockListManager:
         """清除缓存"""
         self._cache.clear()
         logger.info("股票列表缓存已清除")
+    
+    def get_or_update_daily_list(self, list_name: str) -> List[Dict]:
+        """获取或更新每日股票列表
+        
+        如果是当天第一次请求，会从数据源更新列表；
+        否则直接读取本地缓存文件。
+        
+        Args:
+            list_name: 列表名称，如 '全市场', '上证A股', '深证A股'
+            
+        Returns:
+            股票列表
+        """
+        from datetime import datetime
+        
+        # 映射内部名称
+        # 如果是"全市场"，我们可能没有直接对应的单个文件，需要合并或者定义一个新名
+        # 为了简单，我们定义 '全市场' 对应 'all_stocks'
+        # '上证A股' 对应 'sh_stocks'
+        # '深证A股' 对应 'sz_stocks'
+        
+        name_map = {
+            '全市场': '全部股票',
+            '上证A股': '上证A股',
+            '深证A股': '深证A股'
+        }
+        
+        target_name = name_map.get(list_name, list_name)
+        file_path = self.data_dir / f"{target_name}_股票列表.csv"
+        
+        should_update = False
+        if not file_path.exists():
+            should_update = True
+        else:
+            # 检查修改时间是否是今天
+            mtime = datetime.fromtimestamp(file_path.stat().st_mtime)
+            today = datetime.now()
+            if mtime.date() != today.date():
+                should_update = True
+        
+        if should_update:
+            logger.info(f"股票列表 '{target_name}' 需要更新 (本地文件不存在或过期)")
+            # 尝试更新
+            # 注意: '全部股票' 在 update_list_from_provider 中已有逻辑
+            # 但是 Baostock/AkShare 是否能快速获取全列表?
+            # update_list_from_provider 默认使用 akshare, 比较快
+            if self.update_list_from_provider(target_name):
+                logger.info(f"已更新每日列表: {target_name}")
+            else:
+                logger.warning(f"更新列表 {target_name} 失败，将尝试使用旧文件(如果存在)")
+        
+        return self.load_list(target_name)

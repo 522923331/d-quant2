@@ -191,7 +191,12 @@ class BaostockDataProvider:
                 
             except Exception as e:
                 logger.warning(f"获取{stock_code}数据异常(尝试{attempt+1}/{retries}): {e}")
+                # 尝试重新登录以修复连接问题 (如 Broken pipe)
                 if attempt < retries - 1:
+                    try:
+                        self.login()
+                    except:
+                        pass
                     continue
         
         return pd.DataFrame()

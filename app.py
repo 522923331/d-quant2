@@ -258,8 +258,19 @@ def stock_selection_page():
         
         # 基本设置
         st.subheader("基本设置")
-        market = st.selectbox("市场", ["上证(sh)", "深证(sz)"])
-        market_code = 'sh' if '上证' in market else 'sz'
+        
+        # 股票范围选择
+        from dquant2.core.data.stock_lists import StockListManager
+        sl_manager_sidebar = StockListManager()
+        avail_lists = sl_manager_sidebar.get_available_lists()
+        
+        # 选项: 实时获取 + 现有列表
+        realtime_lists = ["全市场"]
+        scope_options = realtime_lists + avail_lists
+        stock_scope = st.selectbox("股票范围", scope_options, index=0, help="选择'全市场'等选项将获取当日最新列表(自动缓存)；选择特定列表将在列表范围内筛选")
+        
+        # market = st.selectbox("市场", ["上证(sh)", "深证(sz)"]) # 已合并到股票范围
+        market_code = 'all' # 默认all，具体由candidate_codes决定
         max_stocks = st.number_input("股票数量上限", min_value=1, max_value=100, value=10)
         
         # 技术指标
@@ -330,7 +341,7 @@ def stock_selection_page():
             use_net_profit_margin = st.checkbox("净利率 > 10%", value=False)
         
         # 开始选股按钮
-        run_selection = st.button("🚀 开始选股", type="primary", use_container_width=True)
+        run_selection = st.button("🚀 开始选股", type="primary", width="stretch")
     
     # 主区域
     if run_selection:
@@ -371,6 +382,24 @@ def stock_selection_page():
             use_roe=use_roe,
             use_net_profit_margin=use_net_profit_margin
         )
+        
+
+        # 加载股票列表 logic
+        with st.spinner(f"正在加载 '{stock_scope}' 列表..."):
+            selected_scope_stocks = []
+            
+            if stock_scope in realtime_lists:
+                # 使用每日缓存获取最新列表
+                selected_scope_stocks = sl_manager_sidebar.get_or_update_daily_list(stock_scope)
+            else:
+                # 加载静态列表
+                selected_scope_stocks = sl_manager_sidebar.load_list(stock_scope)
+                
+            if selected_scope_stocks:
+                config.candidate_codes = [s['code'] for s in selected_scope_stocks]
+                st.info(f"已加载 '{stock_scope}' 中的 {len(config.candidate_codes)} 只股票作为候选池")
+            else:
+                st.warning(f"加载列表 '{stock_scope}' 失败或列表为空")
         
         # 显示选股条件
         st.subheader("📋 筛选条件")
@@ -426,7 +455,7 @@ def stock_selection_page():
                 })
             
             results_df = pd.DataFrame(df_data)
-            st.dataframe(results_df, use_container_width=True, hide_index=True)
+            st.dataframe(results_df, width="stretch", hide_index=True)
             
             # 展开显示详细条件
             with st.expander("📋 查看详细筛选条件"):
@@ -457,6 +486,24 @@ def stock_selection_page():
                     # 保存到session state供联动页面使用
                     st.session_state.selected_stocks = results
                     st.success(f"✅ 已将 {len(results)} 只股票传入批量回测！请切换到'选股回测联动'页面")
+                    
+            # 保存为自定义列表
+            st.divider()
+            with st.expander("💾 保存为自定义股票列表", expanded=True):
+                 col_s1, col_s2 = st.columns([3, 1])
+                 with col_s1:
+                     new_list_name = st.text_input("列表名称", placeholder="例如: 优质成长股_20250201")
+                 with col_s2:
+                     save_btn = st.button("保存列表", width="stretch")
+                     
+                 if save_btn and new_list_name:
+                     try:
+                         # 提取代码和名称
+                         stock_items = [{'code': r['code'], 'name': r['name']} for r in results]
+                         sl_manager_sidebar.create_custom_list(new_list_name, stock_items)
+                         st.success(f"✅ 已成功保存列表: {new_list_name} ({len(stock_items)}只股票)")
+                     except Exception as e:
+                         st.error(f"保存失败: {str(e)}")
         else:
             st.info("未找到符合条件的股票,请尝试调整筛选条件")
     else:
@@ -466,7 +513,7 @@ def stock_selection_page():
         st.markdown("""
         ### 🎯 使用说明
         
-        1. **选择市场**: 上证或深证
+        1. **选择范围**: 选择"全市场"或特定板块/指数
         2. **设置数量**: 限制筛选股票的数量
         3. **勾选指标**: 选择要使用的技术指标
         4. **设置参数**: 配置价格区间、换手率等
@@ -758,7 +805,7 @@ def backtest_page():
             )
         
         # 运行按钮
-        run_backtest = st.button("🚀 运行回测", type="primary", use_container_width=True)
+        run_backtest = st.button("🚀 运行回测", type="primary", width="stretch")
     
     # 主区域
     if run_backtest:
@@ -881,7 +928,7 @@ def backtest_page():
                     f"{performance['sortino_ratio']:.2f}"
                 ]
             })
-            st.dataframe(metrics_df, hide_index=True, use_container_width=True)
+            st.dataframe(metrics_df, hide_index=True, width="stretch")
         
         with col2:
             st.markdown("**资金与交易**")
@@ -896,7 +943,7 @@ def backtest_page():
                     f"¥{portfolio['total_commission']:,.2f}"
                 ]
             })
-            st.dataframe(metrics_df, hide_index=True, use_container_width=True)
+            st.dataframe(metrics_df, hide_index=True, width="stretch")
         
         # 交易统计
         if performance.get('win_rate') is not None:
@@ -912,19 +959,19 @@ def backtest_page():
         # 图表
         st.subheader("📉 权益曲线")
         equity_fig = create_equity_curve_chart(results['equity_curve'])
-        st.plotly_chart(equity_fig, use_container_width=True)
+        st.plotly_chart(equity_fig, width="stretch")
         
         # 回撤曲线
         st.subheader("📉 回撤分析")
         drawdown_fig = create_drawdown_chart(results['equity_curve'])
-        st.plotly_chart(drawdown_fig, use_container_width=True)
+        st.plotly_chart(drawdown_fig, width="stretch")
         
         # 交易记录
         if results['trades']:
             st.subheader("💱 交易记录")
             trades_fig = create_trades_chart(results['trades'])
             if trades_fig:
-                st.plotly_chart(trades_fig, use_container_width=True)
+                st.plotly_chart(trades_fig, width="stretch")
             
             # 交易明细表
             with st.expander("📋 查看交易明细"):
@@ -933,14 +980,14 @@ def backtest_page():
                 st.dataframe(
                     trades_df[['timestamp', 'direction', 'quantity', 'price', 'commission']],
                     hide_index=True,
-                    use_container_width=True
+                    width="stretch"
                 )
         
         # 权益曲线数据
         with st.expander("📊 权益曲线数据"):
             equity_df = pd.DataFrame(results['equity_curve'])
             equity_df['timestamp'] = pd.to_datetime(equity_df['timestamp'])
-            st.dataframe(equity_df, hide_index=True, use_container_width=True)
+            st.dataframe(equity_df, hide_index=True, width="stretch")
         
         # 导出结果
         st.subheader("💾 导出结果")
@@ -1024,7 +1071,7 @@ def backtest_comparison_page():
         })
     
     df = pd.DataFrame(comparison_data)
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df, width="stretch")
     
     # 权益曲线对比图
     if len(st.session_state.comparison_results) >= 2:
@@ -1046,7 +1093,7 @@ def backtest_comparison_page():
             yaxis_title='权益',
             height=400
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
     
     # 清除对比结果
     if st.button("🗑️ 清除所有对比结果"):
@@ -1162,7 +1209,7 @@ def stock_backtest_workflow_page():
                 })
         
         df = pd.DataFrame(results_data)
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
         
         # 按收益排序
         successful = [r for r in st.session_state.workflow_results if r['success']]
@@ -1456,7 +1503,7 @@ def data_management_page():
             
             if cache_data:
                 df = pd.DataFrame(cache_data)
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, width="stretch", hide_index=True)
                 
                 st.divider()
                 
@@ -1622,7 +1669,7 @@ def data_management_page():
                 df_show['size'] = df_show['size'].apply(lambda x: f"{x/1024:.1f} KB")
                 df_show['modified_time'] = df_show['modified_time'].dt.strftime('%Y-%m-%d %H:%M')
                 
-                st.dataframe(df_show, use_container_width=True, hide_index=True)
+                st.dataframe(df_show, width="stretch", hide_index=True)
                 
                 # 删除功能
                 with st.expander("🗑️ 删除文件"):
@@ -1686,7 +1733,7 @@ def data_management_page():
                             '大小': f"{info['file_size_mb']:.2f} MB"
                         })
                 if cache_data:
-                    st.dataframe(pd.DataFrame(cache_data), use_container_width=True)
+                    st.dataframe(pd.DataFrame(cache_data), width="stretch")
         else:
             st.info("暂无缓存文件")
 

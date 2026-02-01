@@ -20,6 +20,9 @@ class StockSelectorConfig:
     # 数量限制
     max_stocks: int = 10
     
+    # 候选股票代码列表 (New)
+    candidate_codes: Optional[List[str]] = None
+    
     # 技术指标条件
     use_macd: bool = True  # MACD金叉
     use_kdj: bool = True  # KDJ可买入

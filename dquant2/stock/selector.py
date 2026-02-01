@@ -90,12 +90,39 @@ class StockSelector:
                 return []
             
             # 获取股票列表
-            stock_list = self.data_provider.get_stock_list(self.config.market)
+            if self.config.candidate_codes:
+                self._notify_progress(f"使用自定义候选股票列表 ({len(self.config.candidate_codes)}只)...")
+                
+                # 清洗代码 (去掉后缀，适配 BAOSTOCK/AKSHARE 内部逻辑)
+                # 例如: 600000.SH -> 600000 
+                # 注意 BaostockProvider.get_stock_data 需要不带后缀(或者我们传进去它自己处理?)
+                # 之前验证 BaostockProvider._get_baostock_code 会加前缀
+                # 所以我们尽量传入纯数字，或者让provider处理
+                
+                # 这里简单处理一下: 如果是数字开头的，尝试提取数字部分
+                cleaned_codes = []
+                for code in self.config.candidate_codes:
+                    if '.' in code:
+                        cleaned_codes.append(code.split('.')[0])
+                    else:
+                        cleaned_codes.append(code)
+                
+                stock_list = cleaned_codes
+            else:
+                # 根据市场设置获取股票列表
+                if self.config.market == 'all':
+                    sh_list = self.data_provider.get_stock_list('sh')
+                    sz_list = self.data_provider.get_stock_list('sz')
+                    stock_list = sh_list + sz_list
+                else:
+                    stock_list = self.data_provider.get_stock_list(self.config.market)
+                
             if not stock_list:
                 self._notify_progress("未找到股票")
                 return []
             
-            self._notify_progress(f"获取{self.config.market.upper()}市场{len(stock_list)}只股票基础信息...")
+            if not self.config.candidate_codes:
+                self._notify_progress(f"获取{self.config.market.upper()}市场{len(stock_list)}只股票基础信息...")
             
             # --- 新增步骤：获取基础信息进行初筛 ---
             basics_df = pd.DataFrame()
@@ -243,7 +270,7 @@ class StockSelector:
             if conditions_met:
                 stock_name = self.data_provider.get_stock_name(stock_code)
                 last_close = float(stock_df['close'].iloc[-1])
-                last_date = stock_df['date'].iloc[-1]
+                last_date = stock_df.index[-1]
                 
                 return {
                     'code': stock_code,
