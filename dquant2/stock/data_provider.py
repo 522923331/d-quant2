@@ -177,6 +177,15 @@ class BaostockDataProvider:
                 
                 stock_df = stock_df.dropna()
                 
+                # 关键：将date列转换为datetime并设置为索引
+                stock_df['date'] = pd.to_datetime(stock_df['date'])
+                stock_df.set_index('date', inplace=True)
+                
+                # 保存到缓存
+                from dquant2.core.data.cache import ParquetCache
+                cache = ParquetCache()
+                cache.save(stock_code, stock_df)
+                
                 logger.debug(f"成功获取{stock_code}数据: {len(stock_df)}条")
                 return stock_df
                 

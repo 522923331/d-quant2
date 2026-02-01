@@ -45,6 +45,7 @@ class ParquetCache:
         """
         file_path = self._get_cache_path(symbol)
         if not file_path.exists():
+            logger.debug(f"缓存未命中 {symbol}: 文件不存在")
             return None
         
         try:
@@ -55,37 +56,54 @@ class ParquetCache:
             if not isinstance(df.index, pd.DatetimeIndex):
                 df.index = pd.to_datetime(df.index)
             
-            # 标准化请求日期
-            req_start = pd.to_datetime(start_date).normalize()
-            req_end = pd.to_datetime(end_date).normalize()
+            # 标准化请求日期（兼容两种格式）
+            req_start = pd.to_datetime(start_date, format='mixed').normalize()
+            req_end = pd.to_datetime(end_date, format='mixed').normalize()
             
             # 检查缓存数据的时间范围
-            # 注意：选股通常需要只要有这一段数据就行，不一定要求缓存必须包含比请求更宽的范围
-            # 但为了严谨，我们检查是否有覆盖
-            # 实际场景：如果缓存了历史全量数据，那么只要缓存的结束日期 >= 请求结束日期即可
-            # 如果请求的是历史某一段，只要缓存包含即可
-            
             cache_start = df.index.min()
             cache_end = df.index.max()
             
-            # 如果请求的数据在缓存范围内
-            # 宽松策略：只要有交集就返回交集部分？
-            # 严格策略：必须完全覆盖？
-            # 优化策略：如果缓存包含 start 到 end 的大部分数据，特别是最新的，就很有用
-            # 这里简单起见：如果缓存的最新日期 >= 请求的结束日期，通常认为缓存有效（对于选股）
-            # 或者如果请求的是历史回测，需要完全覆盖
+            logger.info(f"📦 缓存检查 {symbol}: 请求 {req_start.date()} ~ {req_end.date()}, 缓存 {cache_start.date()} ~ {cache_end.date()}")
             
-            # 这里我们只返回经过切片的数据
-            # 如果请求范围超出缓存范围，则返回 None，触发重新下载（或者增量更新，比较复杂）
-            # 简单实现：只从缓存读取，让调用者决定是否够用
+            # 计算覆盖率：缓存是否完全覆盖请求范围
+            # 策略：如果缓存的起始日期 <= 请求起始，且缓存的结束日期 >= 请求结束，认为完全覆盖
+            # 考虑到交易日的不连续性，我们允许一定的容差
+            fully_covered = (cache_start <= req_start) and (cache_end >= req_end)
             
+            if not fully_covered:
+                # 计算实际数据可用性
+                mask = (df.index >= req_start) & (df.index <= req_end)
+                available_data = df.loc[mask]
+                
+                if available_data.empty:
+                    logger.info(f"❌ 缓存无效 {symbol}: 请求范围完全在缓存外")
+                    return None
+                
+                # 有部分数据，计算覆盖率
+                # 简单策略：如果缓存数据少于请求范围的70%，认为不够，返回None触发完整下载
+                # 这里用天数估算（实际交易日会更少）
+                requested_days = (req_end - req_start).days
+                available_days = (available_data.index.max() - available_data.index.min()).days
+                
+                coverage_ratio = available_days / max(requested_days, 1)
+                
+                logger.info(f"⚠️  部分缓存 {symbol}: 覆盖率 {coverage_ratio:.1%} ({len(available_data)}条/{requested_days}天)")
+                
+                # 如果覆盖率太低，返回None触发重新下载
+                if coverage_ratio < 0.7:
+                    logger.info(f"❌ 缓存覆盖率不足 {symbol}: {coverage_ratio:.1%} < 70%")
+                    return None
+            
+            # 返回请求范围内的数据
             mask = (df.index >= req_start) & (df.index <= req_end)
             sliced_df = df.loc[mask]
             
             if sliced_df.empty:
+                logger.info(f"❌ 缓存无效 {symbol}: 切片后无数据")
                 return None
-                
-            logger.debug(f"从缓存加载 {symbol} 数据: {len(sliced_df)} 条")
+            
+            logger.info(f"✅ 缓存命中 {symbol}: 返回 {len(sliced_df)} 条数据")
             return sliced_df
             
         except Exception as e:
@@ -125,12 +143,71 @@ class ParquetCache:
             logger.error(f"写入缓存失败 {symbol}: {e}")
 
     def clear(self, symbol: Optional[str] = None):
-        """清除缓存"""
+        """清除缓存
+        
+        Args:
+            symbol: 股票代码，如果为None则清除所有缓存
+        """
         if symbol:
             file_path = self._get_cache_path(symbol)
             if file_path.exists():
                 os.remove(file_path)
+                logger.info(f"🗑️  已清除 {symbol} 的缓存")
         else:
             # 清除所有
+            count = 0
             for f in self.cache_dir.glob("*.parquet"):
                 os.remove(f)
+                count += 1
+            logger.info(f"🗑️  已清除所有缓存 ({count} 个文件)")
+    
+    def get_cache_info(self, symbol: str) -> Optional[dict]:
+        """获取指定股票的缓存信息
+        
+        Args:
+            symbol: 股票代码
+            
+        Returns:
+            缓存信息字典，包含：文件大小、数据条数、日期范围等
+        """
+        file_path = self._get_cache_path(symbol)
+        if not file_path.exists():
+            return None
+        
+        try:
+            df = pd.read_parquet(file_path)
+            if not isinstance(df.index, pd.DatetimeIndex):
+                df.index = pd.to_datetime(df.index)
+            
+            file_size = os.path.getsize(file_path)
+            
+            return {
+                'symbol': symbol,
+                'file_path': str(file_path),
+                'file_size': file_size,
+                'file_size_mb': file_size / (1024 * 1024),
+                'rows': len(df),
+                'columns': list(df.columns),
+                'start_date': df.index.min(),
+                'end_date': df.index.max(),
+                'days_span': (df.index.max() - df.index.min()).days
+            }
+        except Exception as e:
+            logger.error(f"获取缓存信息失败 {symbol}: {e}")
+            return None
+    
+    def get_cache_stats(self) -> dict:
+        """获取缓存目录统计信息
+        
+        Returns:
+            统计信息字典
+        """
+        parquet_files = list(self.cache_dir.glob("*.parquet"))
+        total_size = sum(f.stat().st_size for f in parquet_files)
+        
+        return {
+            'cache_dir': str(self.cache_dir),
+            'total_files': len(parquet_files),
+            'total_size_mb': total_size / (1024 * 1024),
+            'files': [f.stem for f in parquet_files]
+        }

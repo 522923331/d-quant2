@@ -221,12 +221,12 @@ def stock_selection_page():
         # 数据源设置
         st.subheader("数据源设置")
         stock_data_provider_map = {
-            "AkShare (推荐)": "akshare",
-            "Baostock": "baostock"
+            "Baostock (推荐)": "baostock",
+            "AkShare": "akshare"
         }
         
         # 从session state获取默认值（用于同步）
-        default_idx = 0  # 默认AkShare
+        default_idx = 0  # 默认Baostock
         if 'stock_data_provider' in st.session_state:
             current = st.session_state.stock_data_provider
             for i, (_, v) in enumerate(stock_data_provider_map.items()):
@@ -1179,6 +1179,405 @@ def stock_backtest_workflow_page():
                 st.write(f"{medal} **{stock['name']}** ({stock['code']}): {ret:.2f}%")
 
 
+def data_management_page():
+    """数据管理中心 - 合并数据下载和缓存管理"""
+    st.markdown('<h1 class="main-header">💾 数据管理中心</h1>', unsafe_allow_html=True)
+    
+    st.info("💡 统一管理股票数据：下载、缓存、清理 - 一站式解决方案")
+    
+    from dquant2.core.data.downloader import DataDownloader
+    from dquant2.core.data.cache import ParquetCache
+    from dquant2.stock.data_provider import create_data_provider
+    from datetime import date, timedelta
+    
+    # 侧边栏配置
+    with st.sidebar:
+        st.header("⚙️ 配置")
+        
+        # 数据源选择
+        st.subheader("数据源")
+        provider_map = {
+            "Baostock (推荐)": "baostock",
+            "AkShare": "akshare"
+        }
+        provider_display = st.selectbox("选择数据源", list(provider_map.keys()))
+        provider_name = provider_map[provider_display]
+        
+        # 时间范围
+        st.subheader("时间范围")
+        
+        # 预设选项
+        preset = st.selectbox(
+            "快速选择",
+            ["自定义", "近1年", "近3年", "近5年", "所有数据(2010至今)"]
+        )
+        
+        today = date.today()
+        if preset == "近1年":
+            default_start = today - timedelta(days=365)
+            default_end = today
+        elif preset == "近3年":
+            default_start = today - timedelta(days=365*3)
+            default_end = today
+        elif preset == "近5年":
+            default_start = today - timedelta(days=365*5)
+            default_end = today
+        elif preset == "所有数据(2010至今)":
+            default_start = date(2010, 1, 1)
+            default_end = today
+        else:
+            default_start = today - timedelta(days=365)
+            default_end = today
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            start_date = st.date_input("开始日期", value=default_start)
+        with col2:
+            end_date = st.date_input("结束日期", value=default_end)
+        
+        # 下载选项
+        st.subheader("下载选项")
+        force_download = st.checkbox("强制重新下载", value=False, help="忽略缓存，强制重新下载")
+        incremental_update = st.checkbox("智能增量更新", value=True, help="只下载缺失的新数据，自动合并到现有缓存")
+    
+    # 主区域 - 4个标签页
+    tabs = st.tabs(["📄 单只股票", "📋 批量下载", "🌐 整市场", "🗂️ 缓存管理"])
+    
+    # Tab 1: 单只股票
+    with tabs[0]:
+        st.subheader("下载单只股票")
+        
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            single_symbol = st.text_input("股票代码", placeholder="例如: 600000", key="single_symbol")
+        with col2:
+            st.write("")  # 占位
+            st.write("")  # 占位
+            download_single = st.button("⬇️ 下载", type="primary", key="btn_single")
+        
+        if download_single and single_symbol:
+            with st.spinner("正在下载..."):
+                provider = create_data_provider(provider_name)
+                downloader = DataDownloader(provider, ParquetCache())
+                
+                result = downloader.download_single(
+                    single_symbol,
+                    start_date.strftime("%Y-%m-%d"),
+                    end_date.strftime("%Y-%m-%d"),
+                    force=force_download,
+                    incremental=incremental_update
+                )
+                
+                if result['success']:
+                    st.success(f"✅ {single_symbol} 下载成功！共 {result['rows']} 条数据")
+                else:
+                    st.error(f"❌ {single_symbol} 下载失败: {result['message']}")
+    
+    # Tab 2: 批量下载
+    with tabs[1]:
+        st.subheader("批量下载股票")
+        
+        batch_mode = st.radio(
+            "输入方式",
+            ["文本输入", "CSV文件上传"],
+            horizontal=True
+        )
+        
+        symbols = []
+        
+        if batch_mode == "文本输入":
+            batch_text = st.text_area(
+                "股票代码列表",
+                placeholder="每行一个股票代码，例如:\n600000\n000001\n600519",
+                height=200
+            )
+            if batch_text:
+                symbols = [s.strip() for s in batch_text.split('\n') if s.strip()]
+        else:
+            uploaded_file = st.file_uploader("上传CSV文件", type=['csv'])
+            if uploaded_file:
+                try:
+                    df = pd.read_csv(uploaded_file)
+                    # 假设第一列是股票代码
+                    symbols = df.iloc[:, 0].astype(str).tolist()
+                    st.success(f"✅ 已读取 {len(symbols)} 只股票")
+                except Exception as e:
+                    st.error(f"❌ 读取文件失败: {e}")
+        
+        if symbols:
+            st.write(f"**共 {len(symbols)} 只股票待下载**")
+            
+            if st.button("⬇️ 开始批量下载", type="primary", key="btn_batch"):
+                provider = create_data_provider(provider_name)
+                downloader = DataDownloader(provider, ParquetCache())
+                
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                def progress_callback(message, current, total):
+                    progress = current / total
+                    progress_bar.progress(progress)
+                    status_text.text(f"{message} ({current}/{total})")
+                
+                with st.spinner("批量下载中..."):
+                    summary = downloader.download_batch(
+                        symbols,
+                        start_date.strftime("%Y-%m-%d"),
+                        end_date.strftime("%Y-%m-%d"),
+                        progress_callback=progress_callback,
+                        force=force_download,
+                        incremental=incremental_update
+                    )
+                
+                # 清除进度显示
+                progress_bar.empty()
+                status_text.success(f"✅ 下载完成！成功 {summary['success']} 个，缓存 {summary['cached']} 个，失败 {summary['failed']} 个")
+                
+                # 显示结果
+                st.divider()
+                st.subheader("📊 下载结果")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("总数", summary['total'])
+                col2.metric("✅ 成功", summary['success'], delta_color="normal")
+                col3.metric("💾 缓存", summary['cached'], delta_color="off")
+                col4.metric("❌ 失败", summary['failed'], delta_color="inverse")
+                
+                # 失败详情
+                if summary['failed'] > 0:
+                    with st.expander("查看失败详情"):
+                        failed_list = [r for r in summary['results'] if not r['success']]
+                        for item in failed_list:
+                            st.write(f"- {item['symbol']}: {item['message']}")
+    
+    # Tab 3: 整市场下载
+    with tabs[2]:
+        st.subheader("下载整个市场数据")
+        
+        st.warning("⚠️ 整市场下载会占用较长时间，建议选择较短的时间范围进行测试")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            market = st.selectbox("选择市场", ["上证 (sh)", "深证 (sz)"])
+            market_code = 'sh' if '上证' in market else 'sz'
+        
+        with col2:
+            max_stocks = st.number_input(
+                "限制数量（0=不限制）",
+                min_value=0,
+                max_value=5000,
+                value=50,
+                help="用于测试，建议先下载少量股票"
+            )
+        
+        if st.button("⬇️ 开始下载整市场", type="primary", key="btn_market"):
+            provider = create_data_provider(provider_name)
+            downloader = DataDownloader(provider, ParquetCache())
+            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            def progress_callback(message, current, total):
+                progress = current / total
+                progress_bar.progress(progress)
+                status_text.text(f"{message} ({current}/{total})")
+            
+            with st.spinner("下载中..."):
+                summary = downloader.download_market(
+                    market_code,
+                    start_date.strftime("%Y-%m-%d"),
+                    end_date.strftime("%Y-%m-%d"),
+                    progress_callback=progress_callback,
+                    force=force_download,
+                    incremental=incremental_update,
+                    max_stocks=max_stocks if max_stocks > 0 else None
+                )
+            
+            # 清除进度显示
+            progress_bar.empty()
+            status_text.success(f"✅ 下载完成！成功 {summary['success']} 个，缓存 {summary['cached']} 个，失败 {summary['failed']} 个")
+            
+            # 显示结果
+            st.divider()
+            st.subheader("📊 下载结果")
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("总数", summary['total'])
+            col2.metric("✅ 成功", summary['success'])
+            col3.metric("💾 缓存", summary['cached'])
+            col4.metric("❌ 失败", summary['failed'])
+            
+            if summary['failed'] > 0:
+                with st.expander("查看失败详情"):
+                    failed_list = [r for r in summary['results'] if not r['success']]
+                    for item in failed_list[:20]:  # 最多显示20个
+                        st.write(f"- {item['symbol']}: {item['message']}")
+    
+    # Tab 4: 缓存管理
+    with tabs[3]:
+        st.subheader("📦 缓存管理")
+        
+        cache = ParquetCache()
+        
+        # 获取缓存统计
+        stats = cache.get_cache_stats()
+        
+        # 显示统计信息
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("缓存文件数", f"{stats['total_files']} 个")
+        with col2:
+            st.metric("总大小", f"{stats['total_size_mb']:.2f} MB")
+        with col3:
+            st.metric("缓存目录", stats['cache_dir'])
+        
+        st.divider()
+        
+        # 显示缓存文件列表
+        if stats['total_files'] > 0:
+            st.subheader("📋 缓存文件列表")
+            
+            # 获取每个文件的详细信息
+            cache_data = []
+            for symbol in stats['files']:
+                info = cache.get_cache_info(symbol)
+                if info:
+                    cache_data.append({
+                        '股票代码': symbol,
+                        '数据条数': info['rows'],
+                        '开始日期': info['start_date'].strftime('%Y-%m-%d'),
+                        '结束日期': info['end_date'].strftime('%Y-%m-%d'),
+                        '天数': info['days_span'],
+                        '文件大小': f"{info['file_size_mb']:.2f} MB"
+                    })
+            
+            if cache_data:
+                df = pd.DataFrame(cache_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                st.divider()
+                
+                # 单个文件详情
+                st.subheader("🔍 详情与操作")
+                selected_symbol = st.selectbox("选择股票代码", stats['files'])
+                
+                if selected_symbol:
+                    info = cache.get_cache_info(selected_symbol)
+                    if info:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write(f"**股票代码:** {info['symbol']}")
+                            st.write(f"**数据条数:** {info['rows']}")
+                            st.write(f"**列名:** {', '.join(info['columns'])}")
+                        with col2:
+                            st.write(f"**开始日期:** {info['start_date']}")
+                            st.write(f"**结束日期:** {info['end_date']}")
+                            st.write(f"**时间跨度:** {info['days_span']} 天")
+                        
+                        # 清除单个缓存
+                        if st.button(f"🗑️ 清除 {selected_symbol} 的缓存", key=f"clear_{selected_symbol}"):
+                            cache.clear(selected_symbol)
+                            st.success(f"✅ 已清除 {selected_symbol} 的缓存")
+                            st.rerun()
+            
+            st.divider()
+            
+            # 清除所有缓存
+            st.subheader("⚠️ 危险操作")
+            if st.button("🗑️ 清除所有缓存", type="primary"):
+                cache.clear()
+                st.success("✅ 已清除所有缓存")
+                st.rerun()
+        else:
+            st.info("暂无缓存文件")
+            st.write("当您运行选股或回测时，系统会自动将下载的数据保存到缓存。")
+
+
+def main():
+    """缓存管理页面"""
+    st.markdown('<h1 class="main-header">💾 缓存管理</h1>', unsafe_allow_html=True)
+    
+    from dquant2.core.data.cache import ParquetCache
+    
+    cache = ParquetCache()
+    
+    # 获取缓存统计
+    stats = cache.get_cache_stats()
+    
+    # 显示统计信息
+    st.subheader("📊 缓存统计")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("缓存文件数", f"{stats['total_files']} 个")
+    with col2:
+        st.metric("总大小", f"{stats['total_size_mb']:.2f} MB")
+    with col3:
+        st.metric("缓存目录", stats['cache_dir'])
+    
+    st.divider()
+    
+    # 显示缓存文件列表
+    if stats['total_files'] > 0:
+        st.subheader("📦 缓存文件列表")
+        
+        # 获取每个文件的详细信息
+        cache_data = []
+        for symbol in stats['files']:
+            info = cache.get_cache_info(symbol)
+            if info:
+                cache_data.append({
+                    '股票代码': symbol,
+                    '数据条数': info['rows'],
+                    '开始日期': info['start_date'].strftime('%Y-%m-%d'),
+                    '结束日期': info['end_date'].strftime('%Y-%m-%d'),
+                    '天数': info['days_span'],
+                    '文件大小': f"{info['file_size_mb']:.2f} MB"
+                })
+        
+        if cache_data:
+            df = pd.DataFrame(cache_data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+            
+            st.divider()
+            
+            # 单个文件详情
+            st.subheader("🔍 查看详情")
+            selected_symbol = st.selectbox("选择股票代码", stats['files'])
+            
+            if selected_symbol:
+                info = cache.get_cache_info(selected_symbol)
+                if info:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write(f"**股票代码:** {info['symbol']}")
+                        st.write(f"**数据条数:** {info['rows']}")
+                        st.write(f"**列名:** {', '.join(info['columns'])}")
+                    with col2:
+                        st.write(f"**开始日期:** {info['start_date']}")
+                        st.write(f"**结束日期:** {info['end_date']}")
+                        st.write(f"**时间跨度:** {info['days_span']} 天")
+                    
+                    # 清除单个缓存
+                    if st.button(f"🗑️ 清除 {selected_symbol} 的缓存", key=f"clear_{selected_symbol}"):
+                        cache.clear(selected_symbol)
+                        st.success(f"✅ 已清除 {selected_symbol} 的缓存")
+                        st.rerun()
+        
+        st.divider()
+        
+        # 清除所有缓存
+        st.subheader("⚠️ 危险操作")
+        if st.button("🗑️ 清除所有缓存", type="primary"):
+            cache.clear()
+            st.success("✅ 已清除所有缓存")
+            st.rerun()
+    else:
+        st.info("暂无缓存文件")
+        st.write("当您运行选股或回测时，系统会自动将下载的数据保存到缓存。")
+
+
 def main():
     """主函数 - 页面路由"""
     
@@ -1187,7 +1586,7 @@ def main():
         st.title("d-quant2 量化系统")
         page = st.radio(
             "选择功能",
-            ["📈 回测分析", "🔍 智能选股", "📊 回测对比", "🔄 选股回测联动"],
+            ["📈 回测分析", "🔍 智能选股", "📊 回测对比", "🔄 选股回测联动", "💾 数据管理"],
             label_visibility="collapsed"
         )
         st.divider()
@@ -1199,10 +1598,11 @@ def main():
         stock_selection_page()
     elif page == "📊 回测对比":
         backtest_comparison_page()
-    else:
+    elif page == "🔄 选股回测联动":
         stock_backtest_workflow_page()
+    else:  # 💾 数据管理
+        data_management_page()
 
 
 if __name__ == '__main__':
     main()
-
