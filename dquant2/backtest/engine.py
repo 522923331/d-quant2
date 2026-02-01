@@ -21,6 +21,7 @@ from dquant2.core.capital.fixed_ratio import FixedRatioStrategy
 from dquant2.core.capital.kelly import KellyStrategy
 from dquant2.core.portfolio import Portfolio
 from dquant2.backtest.metrics import PerformanceMetrics
+from dquant2.core.trading.cost import TradingCostCalculator  # 新增
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,8 @@ class BacktestEngine:
         # 初始化投资组合
         self.portfolio = Portfolio(
             initial_cash=config.initial_cash,
-            commission_rate=config.commission_rate  # 佣金率
+            commission_rate=config.commission_rate,  # 佣金率
+            enable_t0_mode=config.enable_t0_mode  # T+0/T+1模式
         )
 
         # 初始化风控
@@ -83,6 +85,20 @@ class BacktestEngine:
             config.capital_strategy,
             config.capital_params
         )
+        
+        # 初始化交易成本计算器（新增）
+        self.cost_calculator = TradingCostCalculator(
+            min_commission=config.min_commission,
+            commission_rate=config.commission_rate,
+            stamp_tax_rate=config.stamp_tax_rate,
+            transfer_fee_rate=config.transfer_fee_rate,
+            flow_fee=config.flow_fee,
+            slippage_type=config.slippage_type,
+            slippage_tick_size=config.slippage_tick_size,
+            slippage_tick_count=config.slippage_tick_count,
+            slippage_ratio=config.slippage_ratio,
+            price_decimals=2  # 默认股票精度，可以根据ETF动态调整
+        )
 
         # 回测状态
         self.current_time: Optional[datetime] = None
@@ -93,6 +109,23 @@ class BacktestEngine:
         self._register_handlers()
 
         logger.info("回测引擎初始化完成")
+        
+        # 打印成本配置
+        logger.info("\n" + "="*60)
+        logger.info("交易成本配置")
+        logger.info("="*60)
+        logger.info(f"最低佣金: {config.min_commission}元")
+        logger.info(f"佣金比例: {config.commission_rate*100}%")
+        logger.info(f"印花税率: {config.stamp_tax_rate*100}%（仅卖出）")
+        logger.info(f"过户费率: {config.transfer_fee_rate*100}%（沪市股票）")
+        logger.info(f"流量费: {config.flow_fee}元/笔")
+        logger.info(f"滑点类型: {config.slippage_type}")
+        if config.slippage_type == 'tick':
+            logger.info(f"  tick大小: {config.slippage_tick_size}元")
+            logger.info(f"  tick跳数: {config.slippage_tick_count}")
+        else:
+            logger.info(f"  滑点比例: {config.slippage_ratio*100}%")
+        logger.info("="*60 + "\n")
 
     def _create_data_provider(self, provider_name: str):
         """创建数据提供者"""
@@ -185,21 +218,34 @@ class BacktestEngine:
     def _simulate_fill(self, order: OrderEvent) -> FillEvent:
         """模拟订单成交
         
-        在回测中，市价单立即成交
-        滑点处理：买入时价格上滑，卖出时价格下滑，使滑点始终对交易者不利
+        使用 TradingCostCalculator 进行完整的成本计算
         """
-        if order.direction == 'BUY':
-            fill_price = order.price * (1 + self.config.slippage)  # 买入时成交价更高
-        else:
-            fill_price = order.price * (1 - self.config.slippage)  # 卖出时成交价更低
-        commission = order.quantity * fill_price * self.config.commission_rate
-
+        # 使用新的成本计算器
+        cost_detail = self.cost_calculator.calculate(
+            stock_code=order.symbol,
+            price=order.price,
+            volume=order.quantity,
+            direction=order.direction
+        )
+        
+        # 记录详细成本
+        logger.debug(
+            f"交易成本 - {order.symbol} {order.direction} "
+            f"{order.quantity}@{order.price:.3f} -> "
+            f"实际价格:{cost_detail.actual_price:.3f}, "
+            f"佣金:{cost_detail.commission:.2f}, "
+            f"印花税:{cost_detail.stamp_tax:.2f}, "
+            f"过户费:{cost_detail.transfer_fee:.2f}, "
+            f"流量费:{cost_detail.flow_fee:.2f}, "
+            f"总成本:{cost_detail.total_cost:.2f}"
+        )
+        
         fill = FillEvent(
             timestamp=self.current_time,
             symbol=order.symbol,
             quantity=order.quantity,
-            price=fill_price,
-            commission=commission,
+            price=cost_detail.actual_price,  # 使用考虑滑点后的价格
+            commission=cost_detail.total_cost,  # 总成本
             direction=order.direction,
             order_id=order.order_id
         )

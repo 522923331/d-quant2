@@ -20,16 +20,19 @@ class Portfolio:
     4. 绩效跟踪
     """
     
-    def __init__(self, initial_cash: float, commission_rate: float = 0.0003):
+    def __init__(self, initial_cash: float, commission_rate: float = 0.0003,
+                 enable_t0_mode: bool = False):
         """初始化组合
         
         Args:
             initial_cash: 初始资金
             commission_rate: 佣金费率
+            enable_t0_mode: 是否启用T+0模式（ETF或期权）
         """
         self.initial_cash = initial_cash
         self.cash = initial_cash
         self.commission_rate = commission_rate
+        self.enable_t0_mode = enable_t0_mode
         
         # 持仓字典 {symbol: Position}
         self.positions: Dict[str, Position] = {}
@@ -92,16 +95,32 @@ class Portfolio:
         
         # 更新持仓
         if symbol not in self.positions:
+            # 判断是否为ETF（T+0）
+            is_t0 = self._is_etf(symbol) or self.enable_t0_mode
+            
             self.positions[symbol] = Position(
                 symbol=symbol,
                 quantity=fill.quantity,
+                available_quantity=fill.quantity if is_t0 else 0,  # T+0立即可用
                 avg_price=fill.price,
                 current_price=fill.price,
-                last_update=fill.timestamp
+                last_update=fill.timestamp,
+                is_t0_mode=is_t0
+            )
+            
+            logger.info(
+                f"新建持仓: {symbol} (模式: {'T+0' if is_t0 else 'T+1'}), "
+                f"持仓:{fill.quantity}, 可用:{fill.quantity if is_t0 else 0}"
             )
         else:
             self.positions[symbol].add_quantity(fill.quantity, fill.price)
             self.positions[symbol].update_price(fill.price, fill.timestamp)
+            
+            pos = self.positions[symbol]
+            logger.info(
+                f"增加持仓: {symbol}, "
+                f"持仓:{pos.quantity}, 可用:{pos.available_quantity}"
+            )
     
     def _handle_sell(self, fill: FillEvent):
         """处理卖出"""
@@ -204,3 +223,36 @@ class Portfolio:
             'num_trades': len(self.trades),
             'num_positions': len(self.positions)
         }
+    
+    def _is_etf(self, symbol: str) -> bool:
+        """判断是否为ETF（T+0模式）
+        
+        ETF代码特征：
+        - 沪市: 51xxxx.SH, 56xxxx.SH
+        - 深市: 15xxxx.SZ, 16xxxx.SZ
+        
+        Args:
+            symbol: 股票代码
+            
+        Returns:
+            是否为ETF
+        """
+        # 去除后缀，只看代码
+        code = symbol.split('.')[0] if '.' in symbol else symbol
+        
+        # ETF代码规则
+        if code.startswith('51') or code.startswith('56'):  # 沪市ETF
+            return True
+        if code.startswith('15') or code.startswith('16'):  # 深市ETF
+            return True
+        
+        return False
+    
+    def unlock_positions_for_next_day(self):
+        """解锁T+1持仓（每个交易日开盘时调用）
+        
+        将所有T+1持仓的数量解锁为可用
+        """
+        for position in self.positions.values():
+            if not position.is_t0_mode:
+                position.unlock_available()

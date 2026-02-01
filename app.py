@@ -21,40 +21,42 @@ from dquant2 import BacktestEngine, BacktestConfig
 from dquant2.stock import StockSelector, StockSelectorConfig
 from dquant2.core.strategy.custom import get_custom_strategy_list, get_custom_strategy_params, reload_custom_strategies
 
-# 页面配置
-st.set_page_config(
-    page_title="d-quant2 量化系统",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+def setup_page():
+    # 页面配置
+    st.set_page_config(
+        page_title="d-quant2 量化系统",
+        page_icon="📈",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
 
-# 自定义CSS
-st.markdown("""
-<style>
-    .main-header {
-        font-size: 2.5rem;
-        font-weight: 700;
-        color: #1f77b4;
-        margin-bottom: 1rem;
-    }
-    .metric-card {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 1rem;
-        border-radius: 10px;
-        color: white;
-        text-align: center;
-    }
-    .positive {
-        color: #00c853;
-        font-weight: bold;
-    }
-    .negative {
-        color: #ff1744;
-        font-weight: bold;
-    }
-</style>
-""", unsafe_allow_html=True)
+    # 自定义CSS
+    st.markdown("""
+    <style>
+        .main-header {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #1f77b4;
+            margin-bottom: 1rem;
+        }
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 1rem;
+            border-radius: 10px;
+            color: white;
+            text-align: center;
+        }
+        .positive {
+            color: #00c853;
+            font-weight: bold;
+        }
+        .negative {
+            color: #ff1744;
+            font-weight: bold;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
 
 def create_equity_curve_chart(equity_curve):
     """创建权益曲线图"""
@@ -1580,6 +1582,7 @@ def main():
 
 def main():
     """主函数 - 页面路由"""
+    setup_page()
     
     # 侧边栏页面选择
     with st.sidebar:
@@ -1605,4 +1608,21 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        from streamlit import runtime
+        from streamlit.web import cli as stcli
+    except ImportError:
+        # Fallback for very old versions or if import structure differs
+        import streamlit as st
+        # If runtime not found, assume we need to restart or valid context not found? 
+        # Actually safer to just try standard import
+        sys.exit("Error: Streamlit runtime not found. Please run with `streamlit run app.py`")
+
+    import sys
+    
+    if runtime.exists():
+        main()
+    else:
+        # Re-run with streamlit
+        sys.argv = ["streamlit", "run", sys.argv[0], "--server.port=8501", "--server.address=localhost"]
+        sys.exit(stcli.main())
