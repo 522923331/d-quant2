@@ -195,3 +195,125 @@ class BaostockProvider(BaseDataProvider):
     def __del__(self):
         """析构时登出"""
         self._logout()
+    def get_stock_data_multi_period(
+        self,
+        stock_code: str,
+        period: str = '1d',
+        start_date: str = None,
+        end_date: str = None,
+        fields: List[str] = None,
+        dividend_type: str = 'qfq',
+        time_range: str = 'all'
+    ) -> pd.DataFrame:
+        """获取多周期股票数据
+        
+        Args:
+            stock_code: 股票代码
+            period: 周期类型
+            start_date: 起始日期
+            end_date: 结束日期
+            fields: 字段列表
+            dividend_type: 复权方式
+            
+        Returns:
+            DataFrame
+        """
+        if not self._is_logged_in:
+            self._login()
+
+        try:
+            # 字段处理
+            if fields is None:
+                # baostock 默认字段
+                bs_fields = "date,open,high,low,close,volume,amount,adjustflag"
+            else:
+                bs_fields = ",".join(fields)
+                if 'date' not in fields:
+                    bs_fields = "date," + bs_fields
+            
+            # 周期映射
+            freq_map = {
+                '1d': 'd', '1w': 'w', '1M': 'm',
+                '5m': '5', '15m': '15', '30m': '30', '60m': '60'
+            }
+            if period not in freq_map:
+                logger.warning(f"Baostock 不支持周期: {period}")
+                return pd.DataFrame()
+            
+            bs_freq = freq_map[period]
+            
+            # 复权映射
+            # 1:不复权 2:前复权 3:后复权
+            adj_map = {'none': '3', 'qfq': '2', 'hfq': '1', 'front': '2', 'back': '1'}
+            # 注意: Baostock 文档: adjustflag: 复权类型，默认不复权：3；1：后复权；2：前复权。
+            # 修正: 默认3是"不复权", 1是"后复权", 2是"前复权"
+            # 用户传 'none' -> '3'
+            bs_adjust = adj_map.get(dividend_type, '3')
+            
+            # 转换日期
+            s_date = pd.to_datetime(start_date, format='%Y%m%d').strftime('%Y-%m-%d')
+            e_date = pd.to_datetime(end_date, format='%Y%m%d').strftime('%Y-%m-%d')
+            
+            # 代码转换
+            # 如果已有后缀(如sh.600000)，检查是否符合baostock格式
+            # baostock格式: sh.600000
+            # 我们内部格式: 600000.SH
+            # 简单起见，先转为纯数字，再用_get_baostock_code处理
+            if '.' in stock_code:
+                # 检查是否是 baostock 格式
+                if stock_code.startswith('sh.') or stock_code.startswith('sz.'):
+                    bs_code = stock_code
+                else:
+                    # 假设是 600000.SH 格式，取前面数字
+                    code_clean = stock_code.split('.')[0]
+                    bs_code = self._get_baostock_code(code_clean)
+            else:
+                 bs_code = self._get_baostock_code(stock_code)
+            
+            rs = bs.query_history_k_data_plus(
+                bs_code,
+                bs_fields,
+                start_date=s_date,
+                end_date=e_date,
+                frequency=bs_freq,
+                adjustflag=bs_adjust
+            )
+            
+            data_list = []
+            while rs.next():
+                data_list.append(rs.get_row_data())
+                
+            if not data_list:
+                return pd.DataFrame()
+                
+            df = pd.DataFrame(data_list, columns=rs.fields)
+            
+            # 类型转换
+            # baostock返回全是字符串
+            numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'amount']
+            for col in numeric_cols:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce')
+                    
+            # 日期时间处理
+            # 分钟线 baostock 返回 'date'(YYYYMMDD), 'time'(YYYYMMDDHHMMSS)
+            if 'time' in df.columns:
+                df['time'] = pd.to_datetime(df['time'], format='%Y%m%d%H%M%S')
+            if 'date' in df.columns:
+                 df['date'] = pd.to_datetime(df['date'])
+            
+            # 分钟线时间段筛选
+            if period in ['5m', '15m', '30m', '60m'] and time_range != 'all' and 'time' in df.columns:
+                t_start_str, t_end_str = time_range.split('-')
+                t_start = pd.to_datetime(t_start_str, format='%H:%M').time()
+                t_end = pd.to_datetime(t_end_str, format='%H:%M').time()
+                
+                df['time_obj'] = df['time'].dt.time
+                df = df[(df['time_obj'] >= t_start) & (df['time_obj'] <= t_end)]
+                df = df.drop(columns=['time_obj'])
+
+            return df
+            
+        except Exception as e:
+            logger.error(f"Baostock 获取多周期数据失败: {e}")
+            return pd.DataFrame()

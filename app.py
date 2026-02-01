@@ -1496,88 +1496,199 @@ def data_management_page():
             st.write("当您运行选股或回测时，系统会自动将下载的数据保存到缓存。")
 
 
-def main():
-    """缓存管理页面"""
-    st.markdown('<h1 class="main-header">💾 缓存管理</h1>', unsafe_allow_html=True)
+def data_management_page():
+    """数据管理页面"""
+    st.markdown('<h1 class="main-header">💾 数据管理</h1>', unsafe_allow_html=True)
     
-    from dquant2.core.data.cache import ParquetCache
+    tab1, tab2, tab3 = st.tabs(["📥 批量下载", "📂 数据浏览", "💾 缓存管理"])
     
-    cache = ParquetCache()
-    
-    # 获取缓存统计
-    stats = cache.get_cache_stats()
-    
-    # 显示统计信息
-    st.subheader("📊 缓存统计")
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.metric("缓存文件数", f"{stats['total_files']} 个")
-    with col2:
-        st.metric("总大小", f"{stats['total_size_mb']:.2f} MB")
-    with col3:
-        st.metric("缓存目录", stats['cache_dir'])
-    
-    st.divider()
-    
-    # 显示缓存文件列表
-    if stats['total_files'] > 0:
-        st.subheader("📦 缓存文件列表")
+    # ---------------- 批量下载 Tab ----------------
+    with tab1:
+        st.subheader("批量数据下载")
         
-        # 获取每个文件的详细信息
-        cache_data = []
-        for symbol in stats['files']:
-            info = cache.get_cache_info(symbol)
-            if info:
-                cache_data.append({
-                    '股票代码': symbol,
-                    '数据条数': info['rows'],
-                    '开始日期': info['start_date'].strftime('%Y-%m-%d'),
-                    '结束日期': info['end_date'].strftime('%Y-%m-%d'),
-                    '天数': info['days_span'],
-                    '文件大小': f"{info['file_size_mb']:.2f} MB"
-                })
+        # 1. 股票列表选择
+        from dquant2.core.data.stock_lists import StockListManager
+        sl_manager = StockListManager()
+        lists = sl_manager.get_available_lists()
         
-        if cache_data:
-            df = pd.DataFrame(cache_data)
-            st.dataframe(df, use_container_width=True, hide_index=True)
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_list = st.selectbox("选择股票列表", lists, index=lists.index('沪深300成分股') if '沪深300成分股' in lists else 0)
+        with col2:
+            stocks = sl_manager.load_list(selected_list)
+            st.metric("包含股票数", f"{len(stocks)} 只")
             
-            st.divider()
+        with st.expander("查看列表详情"):
+            st.write([f"{s['code']} {s['name']}" for s in stocks[:50]])
+            if len(stocks) > 50:
+                st.write(f"... 等共 {len(stocks)} 只")
+
+        # 2. 下载配置
+        st.divider()
+        st.subheader("下载配置")
+        
+        col_c1, col_c2, col_c3 = st.columns(3)
+        with col_c1:
+            data_provider = st.selectbox("数据源", ["AkShare", "Baostock"], index=1)
+            provider_code = data_provider.lower()
             
-            # 单个文件详情
-            st.subheader("🔍 查看详情")
-            selected_symbol = st.selectbox("选择股票代码", stats['files'])
+        with col_c2:
+            period = st.selectbox("周期类型", ["1d (日线)", "5m (5分钟)", "15m (15分钟)", "30m (30分钟)", "60m (60分钟)"])
+            period_code = period.split(' ')[0]
             
-            if selected_symbol:
-                info = cache.get_cache_info(selected_symbol)
-                if info:
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.write(f"**股票代码:** {info['symbol']}")
-                        st.write(f"**数据条数:** {info['rows']}")
-                        st.write(f"**列名:** {', '.join(info['columns'])}")
-                    with col2:
-                        st.write(f"**开始日期:** {info['start_date']}")
-                        st.write(f"**结束日期:** {info['end_date']}")
-                        st.write(f"**时间跨度:** {info['days_span']} 天")
-                    
-                    # 清除单个缓存
-                    if st.button(f"🗑️ 清除 {selected_symbol} 的缓存", key=f"clear_{selected_symbol}"):
-                        cache.clear(selected_symbol)
-                        st.success(f"✅ 已清除 {selected_symbol} 的缓存")
-                        st.rerun()
+        with col_c3:
+            dividend = st.selectbox("复权方式", ["后复权 (hfq)", "前复权 (qfq)", "不复权 (none)"])
+            dividend_code = dividend.split('(')[1].strip(')')
+            
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            start_date = st.date_input("开始日期", value=datetime(2025, 1, 1)).strftime("%Y%m%d")
+        with col_d2:
+            end_date = st.date_input("结束日期", value=datetime.today()).strftime("%Y%m%d")
+            
+        # 3. 开始下载
+        st.divider()
+        if st.button("🚀 开始批量下载", type="primary"):
+            from dquant2.core.data.download import BatchDownloader
+            downloader = BatchDownloader()
+            
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            log_area = st.empty()
+            logs = []
+            
+            def progress_cb(current, total, msg):
+                progress_bar.progress(current / total)
+                status_text.text(f"{msg} ({current}/{total})")
+                
+            def log_cb(msg):
+                logs.append(f"{datetime.now().strftime('%H:%M:%S')} - {msg}")
+                # 只显示最近10条日志
+                log_area.text("\n".join(logs[-10:]))
+            
+            # 提取代码列表
+            stock_codes = [s['code'] for s in stocks]
+            
+            try:
+                downloader.download_bulk(
+                    stock_list=stock_codes,
+                    period=period_code,
+                    start_date=start_date,
+                    end_date=end_date,
+                    dividend_type=dividend_code,
+                    data_provider=provider_code,
+                    progress_callback=progress_cb,
+                    log_callback=log_cb
+                )
+                st.success("批量下载完成!")
+            except Exception as e:
+                st.error(f"下载过程中发生错误: {str(e)}")
+
+    # ---------------- 数据浏览 Tab ----------------
+    with tab2:
+        st.subheader("本地数据文件")
+        from dquant2.core.data.storage import DataFileManager
+        fm = DataFileManager()
+        
+        # 刷新按钮
+        if st.button("🔄 刷新文件列表"):
+            st.rerun()
+            
+        files = fm.list_files()
+        
+        if files:
+            # 统计
+            total_size = sum(f['size'] for f in files) / (1024 * 1024)
+            st.info(f"共发现 {len(files)} 个数据文件，总占用 {total_size:.2f} MB")
+            
+            # 筛选
+            col_f1, col_f2 = st.columns(2)
+            with col_f1:
+                filter_code = st.text_input("按代码筛选", placeholder="如: 000001")
+            with col_f2:
+                filter_period = st.selectbox("按周期筛选", ["全部"] + list(set(f['period'] for f in files)))
+            
+            display_files = files
+            if filter_code:
+                display_files = [f for f in display_files if filter_code in f['code']]
+            if filter_period != "全部":
+                display_files = [f for f in display_files if f['period'] == filter_period]
+            
+            # 显示表格
+            if display_files:
+                df_files = pd.DataFrame(display_files)
+                # 格式化显示
+                df_show = df_files[['filename', 'period', 'start_date', 'end_date', 'dividend_type', 'size', 'modified_time']].copy()
+                df_show['size'] = df_show['size'].apply(lambda x: f"{x/1024:.1f} KB")
+                df_show['modified_time'] = df_show['modified_time'].dt.strftime('%Y-%m-%d %H:%M')
+                
+                st.dataframe(df_show, use_container_width=True, hide_index=True)
+                
+                # 删除功能
+                with st.expander("🗑️ 删除文件"):
+                     file_to_del = st.selectbox("选择要删除的文件", [f['filename'] for f in display_files])
+                     if st.button("确认删除"):
+                         # 找到对应的文件信息
+                         target = next((f for f in display_files if f['filename'] == file_to_del), None)
+                         if target:
+                             if fm.delete_file(
+                                 target['code'], target['period'], target['start_date'], 
+                                 target['end_date'], target['time_range'], target['dividend_type']
+                             ):
+                                 st.success(f"已删除 {file_to_del}")
+                                 time.sleep(1)
+                                 st.rerun()
+                             else:
+                                 st.error("删除失败")
+            else:
+                st.warning("未找到匹配的文件")
+        else:
+            st.info("暂无本地数据文件，请前往'批量下载'标签页下载数据。")
+
+    # ---------------- 缓存管理 Tab ----------------
+    with tab3:
+        st.subheader("Parquet 缓存管理")
+        st.caption("选股和回测模块使用的临时高速缓存")
+        
+        from dquant2.core.data.cache import ParquetCache
+        cache = ParquetCache()
+        
+        # 获取缓存统计
+        stats = cache.get_cache_stats()
+        
+        # 显示统计信息
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("缓存文件数", f"{stats['total_files']} 个")
+        with col2:
+            st.metric("总大小", f"{stats['total_size_mb']:.2f} MB")
+        with col3:
+            st.metric("缓存目录", stats['cache_dir'])
         
         st.divider()
         
-        # 清除所有缓存
-        st.subheader("⚠️ 危险操作")
-        if st.button("🗑️ 清除所有缓存", type="primary"):
-            cache.clear()
-            st.success("✅ 已清除所有缓存")
-            st.rerun()
-    else:
-        st.info("暂无缓存文件")
-        st.write("当您运行选股或回测时，系统会自动将下载的数据保存到缓存。")
+        if stats['total_files'] > 0:
+            if st.button("🗑️ 清除所有缓存", type="primary"):
+                cache.clear()
+                st.success("✅ 已清除所有缓存")
+                st.rerun()
+                
+            # 显示缓存文件列表
+            with st.expander("查看缓存文件详情"):
+                cache_data = []
+                for symbol in stats['files']:
+                    info = cache.get_cache_info(symbol)
+                    if info:
+                        cache_data.append({
+                            '代码': symbol,
+                            '行数': info['rows'],
+                            '时间范围': f"{info['start_date'].strftime('%Y%m%d')}-{info['end_date'].strftime('%Y%m%d')}",
+                            '大小': f"{info['file_size_mb']:.2f} MB"
+                        })
+                if cache_data:
+                    st.dataframe(pd.DataFrame(cache_data), use_container_width=True)
+        else:
+            st.info("暂无缓存文件")
 
 
 def main():
