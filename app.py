@@ -1739,6 +1739,291 @@ def data_management_page():
             st.info("暂无缓存文件")
 
 
+def risk_dashboard_page():
+    """风控仪表盘页面"""
+    st.markdown('<h1 class="main-header">🛡️ 风控仪表盘</h1>', unsafe_allow_html=True)
+    
+    if 'results' not in st.session_state:
+        st.info("💡 请先在回测页面运行回测，然后返回此页面查看详细风控分析")
+        return
+    
+    results = st.session_state['results']
+    
+    # 从权益曲线计算风险指标
+    from dquant2.core.risk.metrics import RiskMetrics
+    
+    risk_metrics = RiskMetrics()
+    
+    # 加载权益历史
+    for record in results['equity_curve']:
+        risk_metrics.update_equity(record['equity'])
+    
+    # 计算风险摘要
+    risk_summary = risk_metrics.get_risk_summary()
+    
+    # 风险等级
+    risk_level = risk_metrics.assess_risk_level()
+    risk_color = {
+        '低': 'green',
+        '中': 'orange',
+        '高': 'red',
+        '极高': 'darkred'
+    }.get(risk_level, 'gray')
+    
+    st.markdown(f"### 风险等级: <span style='color:{risk_color};font-weight:bold;font-size:1.5em'>{risk_level}</span>", unsafe_allow_html=True)
+    
+    # 核心风险指标
+    st.subheader("📊 核心风险指标")
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric(
+            "VaR (95%)",
+            f"{risk_summary['var_95']:.2f}%",
+            help="在95%置信水平下的最大损失"
+        )
+    
+    with col2:
+        st.metric(
+            "CVaR (95%)",
+            f"{risk_summary['cvar_95']:.2f}%",
+            help="超过VaR的平均损失"
+        )
+    
+    with col3:
+        st.metric(
+            "最大回撤",
+            f"{risk_summary['max_drawdown']:.2f}%",
+            delta_color="inverse"
+        )
+    
+    with col4:
+        st.metric(
+            "Beta",
+            f"{risk_summary['beta']:.2f}",
+            help="市场相关性"
+        )
+    
+    st.divider()
+    
+    # 收益风险比率
+    st.subheader("📈 收益风险比率")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric(
+            "夏普比率",
+            f"{risk_summary['sharpe_ratio']:.2f}",
+            help="每单位风险的超额收益"
+        )
+    
+    with col2:
+        st.metric(
+            "索提诺比率",
+            f"{risk_summary['sortino_ratio']:.2f}",
+            help="每单位下行风险的超额收益"
+        )
+    
+    with col3:
+        st.metric(
+            "卡玛比率",
+            f"{risk_summary['calmar_ratio']:.2f}",
+            help="年化收益率 / 最大回撤"
+        )
+    
+    st.divider()
+    
+    # 风险预警
+    st.subheader("⚠️ 风险预警")
+    
+    alerts = risk_metrics.get_risk_alerts()
+    
+    if alerts:
+        for alert in alerts:
+            alert_color = {
+                'HIGH': '🔴',
+                'MEDIUM': '🟡',
+                'LOW': '🟢'
+            }.get(alert['level'], '⚪')
+            
+            st.warning(f"{alert_color} **{alert['type']}**: {alert['message']}")
+    else:
+        st.success("✅ 当前无风险预警")
+    
+    st.divider()
+    
+    # 回撤分析
+    st.subheader("📉 回撤分析")
+    
+    equity_df = pd.DataFrame(results['equity_curve'])
+    equity_df['timestamp'] = pd.to_datetime(equity_df['timestamp'])
+    
+    # 计算回撤序列
+    cummax = equity_df['equity'].cummax()
+    drawdown = (equity_df['equity'] - cummax) / cummax * 100
+    
+    # 创建回撤图表
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=equity_df['timestamp'],
+        y=drawdown,
+        mode='lines',
+        name='回撤',
+        line=dict(color='#d62728', width=2),
+        fill='tozeroy',
+        fillcolor='rgba(214, 39, 40, 0.3)'
+    ))
+    
+    # 标记最大回撤点
+    max_dd_idx = risk_summary['drawdown_end_idx']
+    if max_dd_idx < len(equity_df):
+        fig.add_trace(go.Scatter(
+            x=[equity_df['timestamp'].iloc[max_dd_idx]],
+            y=[drawdown.iloc[max_dd_idx]],
+            mode='markers',
+            name='最大回撤点',
+            marker=dict(size=15, color='red', symbol='x')
+        ))
+    
+    fig.update_layout(
+        title='回撤曲线',
+        xaxis_title='日期',
+        yaxis_title='回撤 (%)',
+        height=400,
+        template='plotly_white',
+        hovermode='x unified'
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+
+def advanced_analysis_page():
+    """高级分析页面 - 持仓分析、参数优化等"""
+    st.markdown('<h1 class="main-header">🔬 高级分析</h1>', unsafe_allow_html=True)
+    
+    tabs = st.tabs(["📊 持仓分析", "🔧 参数优化", "💾 数据质量"])
+    
+    # Tab 1: 持仓分析
+    with tabs[0]:
+        st.subheader("持仓分析")
+        
+        if 'results' not in st.session_state:
+            st.info("请先运行回测")
+        else:
+            st.info("持仓分析功能开发中...")
+            st.write("将展示：持仓集中度、行业分布、盈利排行等")
+    
+    # Tab 2: 参数优化
+    with tabs[1]:
+        st.subheader("策略参数优化")
+        
+        st.markdown("""
+        ### 🎯 参数优化工具
+        
+        支持的优化方法：
+        - **网格搜索**: 遍历所有参数组合
+        - **随机搜索**: 随机采样参数空间
+        
+        优化目标：
+        - 夏普比率
+        - 总收益率
+        - 卡玛比率
+        """)
+        
+        # 优化配置
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            opt_method = st.selectbox(
+                "优化方法",
+                ["网格搜索", "随机搜索"]
+            )
+        
+        with col2:
+            opt_objective = st.selectbox(
+                "优化目标",
+                ["夏普比率", "总收益率", "卡玛比率"]
+            )
+        
+        # 参数范围设置
+        st.subheader("参数范围")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fast_period_min = st.number_input("快线周期 - 最小", value=3, min_value=1)
+            fast_period_max = st.number_input("快线周期 - 最大", value=15, min_value=1)
+            fast_period_step = st.number_input("快线周期 - 步长", value=2, min_value=1)
+        
+        with col2:
+            slow_period_min = st.number_input("慢线周期 - 最小", value=10, min_value=1)
+            slow_period_max = st.number_input("慢线周期 - 最大", value=40, min_value=1)
+            slow_period_step = st.number_input("慢线周期 - 步长", value=5, min_value=1)
+        
+        if st.button("🚀 开始优化", type="primary"):
+            st.info("参数优化功能开发中...")
+            st.write("将遍历参数组合，找出最优参数")
+    
+    # Tab 3: 数据质量
+    with tabs[2]:
+        st.subheader("数据质量检查")
+        
+        from dquant2.core.data.quality_checker import DataQualityChecker
+        
+        col1, col2 = st.columns([3, 1])
+        
+        with col1:
+            check_symbol = st.text_input("股票代码", value="000001", key="quality_check_symbol")
+        
+        with col2:
+            st.write("")
+            st.write("")
+            run_check = st.button("🔍 检查", type="primary")
+        
+        if run_check and check_symbol:
+            with st.spinner(f"正在检查 {check_symbol} 的数据质量..."):
+                try:
+                    # 加载数据（从缓存）
+                    from dquant2.core.data.cache import ParquetCache
+                    cache = ParquetCache()
+                    
+                    df = cache.load(check_symbol)
+                    
+                    if df is not None and not df.empty:
+                        # 执行质量检查
+                        checker = DataQualityChecker()
+                        check_results = checker.run_full_check(df, check_symbol)
+                        
+                        # 显示质量评分
+                        score = check_results['summary']['quality_score']
+                        score_color = 'green' if score >= 80 else 'orange' if score >= 60 else 'red'
+                        
+                        st.markdown(
+                            f"### 质量评分: <span style='color:{score_color};font-weight:bold;font-size:2em'>{score:.0f}/100</span>",
+                            unsafe_allow_html=True
+                        )
+                        
+                        # 显示检查结果
+                        for check in check_results['checks']:
+                            with st.expander(f"📋 {check['check_type']}", expanded=True):
+                                for issue in check['issues']:
+                                    severity_icon = {
+                                        'ERROR': '❌',
+                                        'WARNING': '⚠️',
+                                        'INFO': 'ℹ️'
+                                    }.get(issue['severity'], '•')
+                                    
+                                    st.write(f"{severity_icon} {issue['message']}")
+                    else:
+                        st.warning(f"未找到 {check_symbol} 的缓存数据，请先运行回测或选股")
+                        
+                except Exception as e:
+                    st.error(f"检查失败: {e}")
+
+
 def main():
     """主函数 - 页面路由"""
     setup_page()
@@ -1748,7 +2033,7 @@ def main():
         st.title("d-quant2 量化系统")
         page = st.radio(
             "选择功能",
-            ["📈 回测分析", "🔍 智能选股", "📊 回测对比", "🔄 选股回测联动", "💾 数据管理"],
+            ["📈 回测分析", "🔍 智能选股", "📊 回测对比", "🔄 选股回测联动", "💾 数据管理", "🛡️ 风控仪表盘", "🔬 高级分析"],
             label_visibility="collapsed"
         )
         st.divider()
@@ -1762,8 +2047,12 @@ def main():
         backtest_comparison_page()
     elif page == "🔄 选股回测联动":
         stock_backtest_workflow_page()
-    else:  # 💾 数据管理
+    elif page == "💾 数据管理":
         data_management_page()
+    elif page == "🛡️ 风控仪表盘":
+        risk_dashboard_page()
+    else:  # 🔬 高级分析
+        advanced_analysis_page()
 
 
 if __name__ == '__main__':

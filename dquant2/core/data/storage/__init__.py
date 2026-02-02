@@ -322,3 +322,9 @@ class DataFileManager:
         except Exception as e:
             logger.error(f"删除文件失败: {e}")
             return False
+
+
+# 导入 SQLite 适配器
+from dquant2.core.data.storage.sqlite_adapter import SQLiteAdapter
+
+__all__ = ["DataFileManager", "SQLiteAdapter"]
