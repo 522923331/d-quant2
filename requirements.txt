@@ -1,9 +1,15 @@
 # d-quant2 依赖包
-pandas>=2.0.0
-numpy>=1.24.0
-python-dateutil>=2.8.0
-streamlit>=1.28.0
-plotly>=5.17.0
-baostock>=0.8.8
-akshare>=1.10.0
-pyarrow>=14.0.0
+# 核心数据处理
+pandas>=2.3.0,<3.0.0  # 2.3.3 - 注意: Streamlit暂不支持pandas 3.x
+numpy>=2.4.0          # 2.4.2
+python-dateutil>=2.9.0  # 2.9.0.post0
+pyarrow>=23.0.0       # 23.0.0
+
+# Web界面
+streamlit>=1.53.0     # 1.53.1
+plotly>=6.5.0         # 6.5.2
+tornado>=6.5.0        # 6.5.4
+
+# 数据源
+baostock>=0.8.9       # 0.8.9
+akshare>=1.18.0       # 1.18.21

@@ -823,7 +823,8 @@ def backtest_page():
                     capital_strategy=capital_strategy,
                     capital_params=capital_params,
                     commission_rate=commission_rate,
-                    slippage=slippage,
+                    slippage_type='ratio',
+                    slippage_ratio=slippage,
                     max_position_ratio=max_position_ratio,
                 )
                 
