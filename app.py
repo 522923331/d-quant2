@@ -659,7 +659,10 @@ def backtest_page():
             "双均线交叉": "ma_cross",
             "RSI策略": "rsi",
             "MACD策略": "macd",
-            "布林带策略": "bollinger"
+            "布林带策略": "bollinger",
+            "网格交易策略": "grid_trading",
+            "动量策略": "momentum",
+            "均值回归策略": "mean_reversion"
         }
         
         # 加载自定义策略
@@ -718,6 +721,37 @@ def backtest_page():
             strategy_params = {
                 'period': boll_period,
                 'std_dev': std_dev
+            }
+        elif strategy_name == "grid_trading":
+            base_price = st.number_input("基准价格", value=10.0, step=0.5)
+            grid_num = st.slider("网格数量", 3, 10, 5)
+            grid_spacing = st.slider("网格间距(%)", 1.0, 5.0, 2.0, 0.5) / 100
+            strategy_params = {
+                'base_price': base_price,
+                'grid_num': grid_num,
+                'grid_spacing': grid_spacing
+            }
+        elif strategy_name == "momentum":
+            momentum_period = st.slider("动量周期", 10, 60, 20)
+            buy_threshold = st.slider("买入阈值(%)", 1.0, 15.0, 5.0, 1.0)
+            sell_threshold = st.slider("卖出阈值(%)", -10.0, -1.0, -3.0, 1.0)
+            volume_confirm = st.checkbox("成交量确认", value=True)
+            strategy_params = {
+                'momentum_period': momentum_period,
+                'buy_threshold': buy_threshold,
+                'sell_threshold': sell_threshold,
+                'volume_confirm': volume_confirm,
+                'volume_ratio': 1.5
+            }
+        elif strategy_name == "mean_reversion":
+            ma_period = st.slider("均线周期", 10, 60, 20)
+            entry_std = st.slider("入场标准差倍数", 1.0, 3.0, 2.0, 0.5)
+            exit_std = st.slider("出场标准差倍数", 0.1, 1.5, 0.5, 0.1)
+            strategy_params = {
+                'ma_period': ma_period,
+                'std_period': ma_period,
+                'entry_std': entry_std,
+                'exit_std': exit_std
             }
         elif is_custom_strategy:
             # 动态渲染自定义策略参数
@@ -992,13 +1026,13 @@ def backtest_page():
         
         # 导出结果
         st.subheader("💾 导出结果")
-        col1, col2 = st.columns(2)
+        col1, col2, col3, col4 = st.columns(4)
         
         with col1:
             # 导出配置
             config_json = json.dumps(results['config'], indent=2, ensure_ascii=False)
             st.download_button(
-                label="📥 下载配置 (JSON)",
+                label="📥 配置 (JSON)",
                 data=config_json,
                 file_name="backtest_config.json",
                 mime="application/json"
@@ -1010,11 +1044,39 @@ def backtest_page():
                 trades_df = pd.DataFrame(results['trades'])
                 csv = trades_df.to_csv(index=False)
                 st.download_button(
-                    label="📥 下载交易记录 (CSV)",
+                    label="📥 交易记录 (CSV)",
                     data=csv,
                     file_name="trades.csv",
                     mime="text/csv"
                 )
+        
+        with col3:
+            # 导出HTML报告
+            if st.button("📄 导出HTML报告"):
+                try:
+                    from dquant2.backtest.report_exporter import ReportExporter
+                    exporter = ReportExporter(results)
+                    html_path = exporter.export_html()
+                    st.success(f"✅ HTML报告已生成: {html_path}")
+                except Exception as e:
+                    st.error(f"❌ 导出失败: {e}")
+        
+        with col4:
+            # 保存到历史记录
+            if st.button("💾 保存到历史"):
+                try:
+                    from dquant2.backtest.history_manager import BacktestHistoryManager
+                    manager = BacktestHistoryManager()
+                    
+                    # 保存记录
+                    record_id = manager.save_backtest(
+                        results,
+                        notes=f"Web界面回测 - {datetime.now().strftime('%Y-%m-%d %H:%M')}",
+                        tags=['web', config.get('strategy_name', 'unknown')]
+                    )
+                    st.success(f"✅ 已保存到历史记录 (ID: {record_id})")
+                except Exception as e:
+                    st.error(f"❌ 保存失败: {e}")
     
     else:
         # 初始提示
@@ -1139,46 +1201,100 @@ def stock_backtest_workflow_page():
             "双均线交叉": "ma_cross",
             "RSI策略": "rsi",
             "MACD策略": "macd",
-            "布林带策略": "bollinger"
+            "布林带策略": "bollinger",
+            "网格交易": "grid_trading",
+            "动量策略": "momentum",
+            "均值回归": "mean_reversion"
         }
         strategy = st.selectbox("回测策略", list(strategy_map.keys()))
         initial_cash = st.number_input("初始资金", value=100000, step=10000)
+        
+        # 并行回测选项
+        enable_parallel = st.checkbox(
+            "启用并行回测",
+            value=True,
+            help="使用多进程加速批量回测（推荐）"
+        )
         
         if st.button("🚀 批量回测", type="primary", disabled=not st.session_state.selected_stocks):
             st.session_state.workflow_results = []
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            for i, stock in enumerate(st.session_state.selected_stocks):
-                status_text.text(f"正在回测: {stock['name']} ({stock['code']})")
-                progress_bar.progress((i + 1) / len(st.session_state.selected_stocks))
+            if enable_parallel:
+                # 使用并行回测
+                from dquant2.backtest.parallel_backtest import ParallelBacktest
                 
-                try:
-                    config = BacktestConfig(
-                        symbol=stock['code'].split('.')[1] if '.' in stock['code'] else stock['code'],
-                        start_date=start_date.strftime('%Y%m%d'),
-                        end_date=end_date.strftime('%Y%m%d'),
-                        initial_cash=initial_cash,
-                        strategy_name=strategy_map[strategy],
-                        data_provider='akshare'
-                    )
-                    
-                    engine = BacktestEngine(config)
-                    result = engine.run()
-                    
+                # 准备基础配置
+                base_config = {
+                    'start_date': start_date.strftime('%Y%m%d'),
+                    'end_date': end_date.strftime('%Y%m%d'),
+                    'initial_cash': initial_cash,
+                    'strategy_name': strategy_map[strategy],
+                    'data_provider': 'akshare'
+                }
+                
+                # 提取股票代码
+                symbols = [
+                    stock['code'].split('.')[1] if '.' in stock['code'] else stock['code']
+                    for stock in st.session_state.selected_stocks
+                ]
+                
+                # 进度回调
+                def progress_callback(message, current, total):
+                    progress_bar.progress(current / total)
+                    status_text.text(message)
+                
+                # 并行执行
+                parallel = ParallelBacktest()
+                results = parallel.run_batch_for_symbols(
+                    symbols,
+                    base_config,
+                    progress_callback
+                )
+                
+                # 转换结果格式
+                for i, result in enumerate(results):
                     st.session_state.workflow_results.append({
-                        'stock': stock,
-                        'result': result,
-                        'success': True
+                        'stock': st.session_state.selected_stocks[i],
+                        'result': result if result['success'] else None,
+                        'error': result.get('error') if not result['success'] else None,
+                        'success': result['success']
                     })
-                except Exception as e:
-                    st.session_state.workflow_results.append({
-                        'stock': stock,
-                        'error': str(e),
-                        'success': False
-                    })
-            
-            status_text.text("批量回测完成!")
+                
+                status_text.text("✅ 并行回测完成!")
+            else:
+                # 使用串行回测
+                for i, stock in enumerate(st.session_state.selected_stocks):
+                    status_text.text(f"正在回测: {stock['name']} ({stock['code']})")
+                    progress_bar.progress((i + 1) / len(st.session_state.selected_stocks))
+                    
+                    try:
+                        config = BacktestConfig(
+                            symbol=stock['code'].split('.')[1] if '.' in stock['code'] else stock['code'],
+                            start_date=start_date.strftime('%Y%m%d'),
+                            end_date=end_date.strftime('%Y%m%d'),
+                            initial_cash=initial_cash,
+                            strategy_name=strategy_map[strategy],
+                            data_provider='akshare'
+                        )
+                        
+                        engine = BacktestEngine(config)
+                        result = engine.run()
+                        
+                        st.session_state.workflow_results.append({
+                            'stock': stock,
+                            'result': result,
+                            'success': True
+                        })
+                    except Exception as e:
+                        st.session_state.workflow_results.append({
+                            'stock': stock,
+                            'error': str(e),
+                            'success': False
+                        })
+                
+                status_text.text("✅ 批量回测完成!")
     
     # 显示批量回测结果
     if st.session_state.workflow_results:
@@ -1913,6 +2029,189 @@ def advanced_analysis_page():
                     st.error(f"检查失败: {e}")
 
 
+def backtest_history_page():
+    """回测历史记录页面"""
+    st.markdown('<h1 class="main-header">📚 回测历史</h1>', unsafe_allow_html=True)
+    
+    from dquant2.backtest.history_manager import BacktestHistoryManager
+    
+    manager = BacktestHistoryManager()
+    
+    # 获取统计信息
+    stats = manager.get_statistics()
+    
+    # 显示统计卡片
+    st.subheader("📊 统计概览")
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("总回测次数", stats['total_count'])
+    
+    with col2:
+        avg_return = stats['avg_performance']['avg_return']
+        st.metric("平均收益率", f"{avg_return:.2f}%")
+    
+    with col3:
+        avg_sharpe = stats['avg_performance']['avg_sharpe']
+        st.metric("平均夏普比率", f"{avg_sharpe:.2f}")
+    
+    with col4:
+        avg_drawdown = stats['avg_performance']['avg_drawdown']
+        st.metric("平均最大回撤", f"{avg_drawdown:.2f}%")
+    
+    st.divider()
+    
+    # 筛选选项
+    st.subheader("🔍 筛选与搜索")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        filter_symbol = st.text_input("股票代码", placeholder="留空显示全部")
+    
+    with col2:
+        strategy_options = ["全部"] + list(stats['strategy_stats'].keys())
+        filter_strategy = st.selectbox("策略", strategy_options)
+        if filter_strategy == "全部":
+            filter_strategy = None
+    
+    with col3:
+        sort_by = st.selectbox("排序方式", ["最新", "收益率最高", "夏普最高"])
+    
+    # 高级筛选
+    with st.expander("🔧 高级筛选"):
+        col_adv1, col_adv2, col_adv3 = st.columns(3)
+        
+        with col_adv1:
+            use_min_return = st.checkbox("最小收益率")
+            if use_min_return:
+                min_return = st.number_input("最小收益率(%)", value=0.0, step=1.0)
+            else:
+                min_return = None
+        
+        with col_adv2:
+            use_max_dd = st.checkbox("最大回撤限制")
+            if use_max_dd:
+                max_drawdown = st.number_input("最大回撤(%)", value=20.0, step=1.0)
+            else:
+                max_drawdown = None
+        
+        with col_adv3:
+            use_min_sharpe = st.checkbox("最小夏普比率")
+            if use_min_sharpe:
+                min_sharpe = st.number_input("最小夏普", value=0.0, step=0.1)
+            else:
+                min_sharpe = None
+    
+    # 查询记录
+    if any([use_min_return, use_max_dd, use_min_sharpe]):
+        # 使用高级搜索
+        records = manager.search_backtests(
+            min_return=min_return,
+            max_drawdown=max_drawdown,
+            min_sharpe=min_sharpe,
+            limit=50
+        )
+    else:
+        # 使用基本列表
+        records = manager.list_backtests(
+            symbol=filter_symbol if filter_symbol else None,
+            strategy_name=filter_strategy,
+            limit=50
+        )
+    
+    # 显示记录列表
+    st.divider()
+    st.subheader(f"📋 历史记录 (共 {len(records)} 条)")
+    
+    if records:
+        # 创建表格数据
+        table_data = []
+        for record in records:
+            table_data.append({
+                'ID': record['id'],
+                '股票': record['symbol'],
+                '策略': record['strategy_name'],
+                '时间范围': f"{record['start_date']}-{record['end_date']}",
+                '收益率(%)': f"{record['total_return_pct']:.2f}" if record['total_return_pct'] else 'N/A',
+                '夏普比率': f"{record['sharpe_ratio']:.2f}" if record['sharpe_ratio'] else 'N/A',
+                '最大回撤(%)': f"{record['max_drawdown']:.2f}" if record['max_drawdown'] else 'N/A',
+                '交易次数': record['num_trades'] or 'N/A',
+                '创建时间': record['created_at'][:19] if record['created_at'] else 'N/A'
+            })
+        
+        df = pd.DataFrame(table_data)
+        st.dataframe(df, width="stretch", hide_index=True)
+        
+        # 详细查看
+        st.divider()
+        st.subheader("🔎 详细查看")
+        
+        selected_id = st.selectbox(
+            "选择记录",
+            [r['id'] for r in records],
+            format_func=lambda x: f"ID {x} - {next(r['symbol'] for r in records if r['id'] == x)}"
+        )
+        
+        if selected_id:
+            record = manager.get_backtest(selected_id)
+            
+            # 显示详细信息
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**基本信息**")
+                st.write(f"- ID: {record['id']}")
+                st.write(f"- 股票: {record['symbol']}")
+                st.write(f"- 策略: {record['strategy_name']}")
+                st.write(f"- 时间: {record['start_date']} ~ {record['end_date']}")
+                st.write(f"- 初始资金: ¥{record['initial_cash']:,.0f}")
+                
+                if record.get('notes'):
+                    st.write(f"- 备注: {record['notes']}")
+                
+                if record.get('tags'):
+                    st.write(f"- 标签: {', '.join(record['tags'])}")
+            
+            with col2:
+                st.markdown("**性能指标**")
+                st.write(f"- 总收益率: {record['total_return_pct']:.2f}%")
+                st.write(f"- 年化收益率: {record['annual_return']:.2f}%")
+                st.write(f"- 最大回撤: {record['max_drawdown']:.2f}%")
+                st.write(f"- 夏普比率: {record['sharpe_ratio']:.2f}")
+                st.write(f"- 胜率: {record['win_rate']:.2f}%")
+                st.write(f"- 交易次数: {record['num_trades']}")
+            
+            # 操作按钮
+            st.divider()
+            col_btn1, col_btn2, col_btn3 = st.columns(3)
+            
+            with col_btn1:
+                if st.button("📊 查看完整结果"):
+                    # 加载完整结果到session_state
+                    st.session_state['results'] = record['results']
+                    st.success("✅ 已加载结果，可在回测分析页面查看详情")
+            
+            with col_btn2:
+                if st.button("📄 导出报告"):
+                    try:
+                        from dquant2.backtest.report_exporter import ReportExporter
+                        exporter = ReportExporter(record['results'])
+                        html_path = exporter.export_html()
+                        st.success(f"✅ 报告已生成: {html_path}")
+                    except Exception as e:
+                        st.error(f"❌ 导出失败: {e}")
+            
+            with col_btn3:
+                if st.button("🗑️ 删除记录", type="primary"):
+                    if manager.delete_backtest(selected_id):
+                        st.success("✅ 已删除")
+                        time.sleep(1)
+                        st.rerun()
+    else:
+        st.info("暂无历史记录")
+
+
 def main():
     """主函数 - 页面路由"""
     setup_page()
@@ -1922,7 +2221,8 @@ def main():
         st.title("d-quant2 量化系统")
         page = st.radio(
             "选择功能",
-            ["📈 回测分析", "🔍 智能选股", "📊 回测对比", "🔄 选股回测联动", "💾 数据管理", "🛡️ 风控仪表盘", "🔬 高级分析"],
+            ["📈 回测分析", "🔍 智能选股", "📊 回测对比", "🔄 选股回测联动", 
+             "💾 数据管理", "🛡️ 风控仪表盘", "🔬 高级分析", "📚 回测历史"],
             label_visibility="collapsed"
         )
         st.divider()
@@ -1940,6 +2240,8 @@ def main():
         data_management_page()
     elif page == "🛡️ 风控仪表盘":
         risk_dashboard_page()
+    elif page == "📚 回测历史":
+        backtest_history_page()
     else:  # 🔬 高级分析
         advanced_analysis_page()
 

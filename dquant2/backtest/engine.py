@@ -58,8 +58,11 @@ class BacktestEngine:
         self.data_manager = DataManager(provider)
 
         # 初始化策略
-        # 导入策略模块以触发注册
-        from dquant2.core.strategy.hypothesis import ma_cross
+        # 导入所有策略模块以触发注册
+        from dquant2.core.strategy.hypothesis import (
+            ma_cross, rsi_strategy, macd_strategy, bollinger_strategy,
+            grid_trading, momentum_strategy, mean_reversion
+        )
         self.strategy = StrategyFactory.create(
             config.strategy_name,
             params=config.strategy_params

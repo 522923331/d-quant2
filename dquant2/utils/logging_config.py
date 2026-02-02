@@ -1,36 +1,131 @@
 """日志配置模块
 
 提供统一的日志配置，支持控制台和文件输出
+增强功能：支持环境变量配置、运行时日志级别调整、日志轮转
 """
 
 import logging
+import logging.handlers
 import os
+import sys
 from datetime import datetime
 from typing import Optional
 
 
+# 从环境变量获取日志级别，默认INFO
+DEFAULT_LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO').upper()
+
+# 日志级别映射
+LOG_LEVELS = {
+    'DEBUG': logging.DEBUG,
+    'INFO': logging.INFO,
+    'WARNING': logging.WARNING,
+    'ERROR': logging.ERROR,
+    'CRITICAL': logging.CRITICAL
+}
+
+
+class ColoredFormatter(logging.Formatter):
+    """带颜色的日志格式化器（用于控制台）"""
+    
+    # ANSI颜色代码
+    COLORS = {
+        'DEBUG': '\033[36m',      # 青色
+        'INFO': '\033[32m',       # 绿色
+        'WARNING': '\033[33m',    # 黄色
+        'ERROR': '\033[31m',      # 红色
+        'CRITICAL': '\033[35m',   # 紫色
+    }
+    RESET = '\033[0m'
+    
+    def format(self, record):
+        # 添加颜色
+        levelname = record.levelname
+        if levelname in self.COLORS and sys.stdout.isatty():
+            record.levelname = f"{self.COLORS[levelname]}{levelname}{self.RESET}"
+        return super().format(record)
+
+
+class LoggerManager:
+    """日志管理器 - 单例模式，支持运行时配置"""
+    
+    _instance = None
+    
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
+    def __init__(self):
+        if not self._initialized:
+            self.current_level = LOG_LEVELS.get(DEFAULT_LOG_LEVEL, logging.INFO)
+            self._initialized = True
+    
+    def set_level(self, level: str):
+        """运行时设置日志级别
+        
+        Args:
+            level: 日志级别字符串 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        """
+        new_level = LOG_LEVELS.get(level.upper(), logging.INFO)
+        self.current_level = new_level
+        
+        # 更新所有处理器的级别
+        logger = logging.getLogger('dquant2')
+        logger.setLevel(new_level)
+        for handler in logger.handlers:
+            handler.setLevel(new_level)
+        
+        logger.info(f"日志级别已更新为: {level.upper()}")
+    
+    def get_level(self) -> str:
+        """获取当前日志级别"""
+        for name, level in LOG_LEVELS.items():
+            if level == self.current_level:
+                return name
+        return 'INFO'
+
+
+# 全局日志管理器实例
+logger_manager = LoggerManager()
+
+
 def setup_logging(
     log_dir: Optional[str] = None,
-    log_level: int = logging.INFO,
+    log_level: Optional[str] = None,  # 改为字符串，支持环境变量
     log_to_file: bool = True,
     log_to_console: bool = True,
-    log_filename: Optional[str] = None
+    log_filename: Optional[str] = None,
+    enable_color: bool = True,
+    max_bytes: int = 10 * 1024 * 1024,  # 10MB
+    backup_count: int = 5
 ) -> logging.Logger:
     """配置日志
     
     Args:
         log_dir: 日志目录，默认为当前目录下的 logs 文件夹
-        log_level: 日志级别，默认 INFO
+        log_level: 日志级别字符串 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+                   如果为None，则从环境变量 LOG_LEVEL 读取，默认INFO
         log_to_file: 是否输出到文件，默认 True
         log_to_console: 是否输出到控制台，默认 True
         log_filename: 日志文件名，默认按日期自动生成
+        enable_color: 是否启用控制台颜色，默认 True
+        max_bytes: 日志文件最大大小（字节），超过后自动轮转
+        backup_count: 保留的备份文件数量
         
     Returns:
         配置好的 logger 对象
     """
+    # 解析日志级别
+    if log_level is None:
+        log_level = DEFAULT_LOG_LEVEL
+    numeric_level = LOG_LEVELS.get(log_level.upper(), logging.INFO)
+    logger_manager.current_level = numeric_level
+    
     # 获取根 logger
     logger = logging.getLogger('dquant2')
-    logger.setLevel(log_level)
+    logger.setLevel(numeric_level)
     
     # 清除现有处理器
     logger.handlers.clear()
@@ -49,12 +144,21 @@ def setup_logging(
     
     # 控制台处理器
     if log_to_console:
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(log_level)
-        console_handler.setFormatter(formatter)
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(numeric_level)
+        
+        # 使用带颜色的格式化器
+        if enable_color:
+            console_handler.setFormatter(ColoredFormatter(
+                '%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            ))
+        else:
+            console_handler.setFormatter(formatter)
+        
         logger.addHandler(console_handler)
     
-    # 文件处理器
+    # 文件处理器（带日志轮转）
     if log_to_file:
         # 确定日志目录
         if log_dir is None:
@@ -69,13 +173,18 @@ def setup_logging(
         
         log_path = os.path.join(log_dir, log_filename)
         
-        # 创建文件处理器
-        file_handler = logging.FileHandler(log_path, encoding='utf-8')
-        file_handler.setLevel(log_level)
+        # 使用 RotatingFileHandler 实现日志轮转
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_path,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+            encoding='utf-8'
+        )
+        file_handler.setLevel(numeric_level)
         file_handler.setFormatter(detailed_formatter)
         logger.addHandler(file_handler)
         
-        logger.info(f"日志文件已创建: {log_path}")
+        logger.info(f"日志文件已创建: {log_path} (级别: {log_level})")
     
     return logger
 
@@ -90,6 +199,28 @@ def get_logger(name: str) -> logging.Logger:
         logger 对象
     """
     return logging.getLogger(f'dquant2.{name}')
+
+
+def set_log_level(level: str):
+    """动态设置日志级别
+    
+    Args:
+        level: 日志级别字符串 (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+    
+    Example:
+        set_log_level('DEBUG')  # 切换到调试模式
+        set_log_level('INFO')   # 切换到正常模式
+    """
+    logger_manager.set_level(level)
+
+
+def get_log_level() -> str:
+    """获取当前日志级别
+    
+    Returns:
+        当前日志级别字符串
+    """
+    return logger_manager.get_level()
 
 
 class BacktestLogger:
