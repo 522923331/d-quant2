@@ -107,6 +107,7 @@ class BacktestEngine:
         self.current_time: Optional[datetime] = None
         self.current_bar = None
         self.is_running = False
+        self.pending_orders = []  # 挂单队列，用于存次日执行的订单
 
         # 注册事件处理器
         self._register_handlers()
@@ -138,6 +139,9 @@ class BacktestEngine:
             return AkShareProvider()
         elif provider_name == 'baostock':
             return BaostockProvider()
+        elif provider_name == 'local_db':
+            from dquant2.core.data.providers.local_db_provider import LocalDBProvider
+            return LocalDBProvider()
         else:
             raise ValueError(f"未知的数据提供者: {provider_name}")
 
@@ -183,7 +187,7 @@ class BacktestEngine:
                 current_price=current_price
             )
         elif event.signal_type == 'SELL':
-            # 卖出：清空持仓
+            # 卖出：清空持仓 (次日开盘执行时已解锁)
             position = self.portfolio.get_position(event.symbol)
             quantity = position.quantity if position else 0
         else:  # HOLD
@@ -207,16 +211,8 @@ class BacktestEngine:
 
     def _on_order(self, event: OrderEvent):
         """处理订单事件"""
-        # 风控检查
-        if self.config.enable_risk_control:
-            is_valid, messages = self.risk_manager.validate_order(event)
-            if not is_valid:
-                logger.warning(f"订单被风控拒绝: {'; '.join(messages)}")
-                return
-
-        # 模拟成交
-        fill = self._simulate_fill(event)
-        self.event_bus.publish('fill', fill)
+        # A股交易为次日开盘价执行，暂存到挂单队列中
+        self.pending_orders.append(event)
 
     def _simulate_fill(self, order: OrderEvent) -> FillEvent:
         """模拟订单成交
@@ -287,9 +283,54 @@ class BacktestEngine:
         logger.info(f"数据加载完成，共 {total_bars} 条")
 
         # 事件循环
+        prev_date = None  # 用于检测新交易日
         for i, (timestamp, bar) in enumerate(data.iterrows()):
             self.current_time = timestamp
             self.current_bar = bar
+
+            # ── 新交易日开始：解锁 T+1 持仓 ──────────────────────────
+            current_date = timestamp.date()
+            if prev_date is None or current_date > prev_date:
+                self.portfolio.unlock_positions_for_next_day()
+                logger.debug(f"新交易日 {current_date}：T+1 持仓已解锁")
+                
+                # ── 处理前一日的挂单（以今日开盘价成交） ──
+                open_price = bar['open']
+                for order in self.pending_orders:
+                    order.price = open_price
+                    order.timestamp = timestamp
+                    
+                    # 校验资金与可用仓位（由于开盘价与昨日收盘价有跳空）
+                    if order.direction == 'BUY':
+                        est_cost = order.quantity * open_price * 1.005 # 预估滑点和佣金上限
+                        if est_cost > self.portfolio.cash:
+                            max_shares = int(self.portfolio.cash / (open_price * 1.005) / 100) * 100
+                            if max_shares > 0:
+                                logger.info(f"开盘跳空调整买单数量: {order.quantity} -> {max_shares}")
+                                order.quantity = max_shares
+                            else:
+                                continue
+                    elif order.direction == 'SELL':
+                        pos = self.portfolio.get_position(order.symbol)
+                        avail_qty = pos.available_quantity if pos else 0
+                        order.quantity = min(order.quantity, avail_qty)
+                        if order.quantity <= 0:
+                            continue
+                            
+                    # 取重新调整的订单经过风控
+                    if self.config.enable_risk_control:
+                        is_valid, messages = self.risk_manager.validate_order(order)
+                        if not is_valid:
+                            logger.warning(f"挂单风控拒绝: {'; '.join(messages)}")
+                            continue
+                            
+                    fill = self._simulate_fill(order)
+                    self.event_bus.publish('fill', fill)
+                    
+                self.pending_orders.clear()
+                
+            prev_date = current_date
+            # ──────────────────────────────────────────────────────────
 
             # 创建市场数据事件
             event = MarketDataEvent(
@@ -308,6 +349,7 @@ class BacktestEngine:
             if (i + 1) % 100 == 0 or i == total_bars - 1:
                 progress = (i + 1) / total_bars * 100
                 logger.info(f"进度: {progress:.1f}% ({i + 1}/{total_bars})")
+
 
         self.strategy.on_stop()
         self.is_running = False

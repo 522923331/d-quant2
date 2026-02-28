@@ -223,6 +223,7 @@ def stock_selection_page():
         # 数据源设置
         st.subheader("数据源设置")
         stock_data_provider_map = {
+            "本地数据库 (quant.db)": "local_db",
             "Baostock (推荐)": "baostock",
             "AkShare": "akshare"
         }
@@ -389,8 +390,8 @@ def stock_selection_page():
             selected_scope_stocks = []
             
             if stock_scope in realtime_lists:
-                # 使用每日缓存获取最新列表
-                selected_scope_stocks = sl_manager_sidebar.get_or_update_daily_list(stock_scope)
+                # 使用每日缓存获取最新列表，通过传入用户选择的数据源
+                selected_scope_stocks = sl_manager_sidebar.get_or_update_daily_list(stock_scope, data_provider=stock_data_provider)
             else:
                 # 加载静态列表
                 selected_scope_stocks = sl_manager_sidebar.load_list(stock_scope)
@@ -622,6 +623,7 @@ def backtest_page():
         
         # 数据源映射：中文显示 -> 英文value
         data_provider_map = {
+            "本地数据库 (quant.db)": "local_db",
             "模拟数据": "mock",
             "AkShare (真实数据)": "akshare",
             "Baostock (真实数据)": "baostock"
@@ -1209,6 +1211,26 @@ def stock_backtest_workflow_page():
         strategy = st.selectbox("回测策略", list(strategy_map.keys()))
         initial_cash = st.number_input("初始资金", value=100000, step=10000)
         
+        # 数据源选择
+        workflow_provider_map = {
+            "本地数据库 (quant.db)": "local_db",
+            "AkShare (真实)": "akshare",
+            "Baostock (真实)": "baostock",
+            "模拟数据": "mock",
+        }
+        # 默认与回测页面同步
+        _wf_default = st.session_state.get('backtest_data_provider', 'local_db')
+        _wf_default_idx = 0
+        for _i, (_k, _v) in enumerate(workflow_provider_map.items()):
+            if _v == _wf_default:
+                _wf_default_idx = _i
+                break
+        workflow_provider_display = st.selectbox(
+            "数据源", list(workflow_provider_map.keys()), index=_wf_default_idx,
+            help="选择联动回测使用的行情数据源"
+        )
+        workflow_data_provider = workflow_provider_map[workflow_provider_display]
+        
         # 并行回测选项
         enable_parallel = st.checkbox(
             "启用并行回测",
@@ -1231,7 +1253,7 @@ def stock_backtest_workflow_page():
                     'end_date': end_date.strftime('%Y%m%d'),
                     'initial_cash': initial_cash,
                     'strategy_name': strategy_map[strategy],
-                    'data_provider': 'akshare'
+                    'data_provider': workflow_data_provider
                 }
                 
                 # 提取股票代码
@@ -1276,7 +1298,7 @@ def stock_backtest_workflow_page():
                             end_date=end_date.strftime('%Y%m%d'),
                             initial_cash=initial_cash,
                             strategy_name=strategy_map[strategy],
-                            data_provider='akshare'
+                            data_provider=workflow_data_provider
                         )
                         
                         engine = BacktestEngine(config)

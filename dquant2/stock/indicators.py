@@ -46,19 +46,24 @@ def calculate_bollinger_bands(
 
 
 def calculate_rsi(data: pd.DataFrame, period: int = 14) -> pd.DataFrame:
-    """计算RSI指标
-    
+    """计算RSI指标（标准 Wilder's Smoothing）
+
+    使用 Wilder 平滑方法（EMA，alpha=1/period），与主流行情软件一致。
+
     Args:
         data: 包含'close'列的DataFrame
         period: 周期
-        
+
     Returns:
         添加了'RSI'列的DataFrame
     """
     delta = data['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    # Wilder's smoothing: EMA with alpha = 1/period (com = period - 1)
+    avg_gain = gain.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+    avg_loss = loss.ewm(com=period - 1, min_periods=period, adjust=False).mean()
+    rs = avg_gain / avg_loss.replace(0, float('nan'))
     rsi = 100 - (100 / (1 + rs))
     data['RSI'] = rsi
     return data
@@ -83,9 +88,11 @@ def calculate_kdj(
     """
     low_min = data['low'].rolling(window=period).min()
     high_max = data['high'].rolling(window=period).max()
-    rsv = (data['close'] - low_min) / (high_max - low_min) * 100
-    data['K'] = rsv.rolling(window=k_smooth).mean()
-    data['D'] = data['K'].rolling(window=d_smooth).mean()
+    denominator = (high_max - low_min).replace(0, float('nan'))
+    rsv = (data['close'] - low_min) / denominator * 100
+    # 标准 KDJ：用 EMA 平滑（Wilder 方式），com = smooth_period - 1
+    data['K'] = rsv.ewm(com=k_smooth - 1, min_periods=1, adjust=False).mean()
+    data['D'] = data['K'].ewm(com=d_smooth - 1, min_periods=1, adjust=False).mean()
     data['J'] = 3 * data['K'] - 2 * data['D']
     return data
 

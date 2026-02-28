@@ -121,45 +121,55 @@ class PerformanceMetrics:
         }
     
     def _calculate_trade_stats(self) -> Dict:
-        """计算交易统计"""
+        """计算交易统计（FIFO配对方式）"""
         trades = self.portfolio.get_trade_history()
-        
+
         if len(trades) < 2:
             return {
                 'num_trades': len(trades),
                 'win_rate': None,
                 'profit_loss_ratio': None,
             }
-        
-        # 配对买卖交易
-        buy_trades = [t for t in trades if t['direction'] == 'BUY']
-        sell_trades = [t for t in trades if t['direction'] == 'SELL']
-        
-        # 计算每次完整交易的盈亏
-        trade_pnls = []
-        for i, sell in enumerate(sell_trades):
-            if i < len(buy_trades):
-                buy = buy_trades[i]
-                pnl = (sell['price'] - buy['price']) * sell['quantity']
-                trade_pnls.append(pnl)
-        
+
+        # ── FIFO 配对：每次卖出消耗最早的买入记录 ──────────────────────
+        buy_queue: list = []   # 元素: {'price': float, 'quantity': int, 'comm_per_share': float}
+        trade_pnls: list = []  # 每笔完整交易的盈亏额
+
+        for t in trades:
+            if t['direction'] == 'BUY':
+                comm_per_share = t['commission'] / t['quantity'] if t['quantity'] > 0 else 0
+                buy_queue.append({'price': t['price'], 'quantity': t['quantity'], 'comm_per_share': comm_per_share})
+            elif t['direction'] == 'SELL':
+                remaining = t['quantity']
+                sell_price = t['price']
+                sell_comm_per_share = t['commission'] / t['quantity'] if t['quantity'] > 0 else 0
+                while remaining > 0 and buy_queue:
+                    buy = buy_queue[0]
+                    matched = min(remaining, buy['quantity'])
+                    pnl = matched * (sell_price - buy['price'] - buy['comm_per_share'] - sell_comm_per_share)
+                    trade_pnls.append(pnl)
+                    remaining -= matched
+                    buy['quantity'] -= matched
+                    if buy['quantity'] == 0:
+                        buy_queue.pop(0)
+
         if not trade_pnls:
             return {
                 'num_trades': len(trades),
                 'win_rate': None,
                 'profit_loss_ratio': None,
             }
-        
+
         # 胜率
-        winning_trades = [p for p in trade_pnls if p > 0]
-        win_rate = len(winning_trades) / len(trade_pnls) * 100
-        
+        winning = [p for p in trade_pnls if p > 0]
+        losing  = [abs(p) for p in trade_pnls if p < 0]
+        win_rate = len(winning) / len(trade_pnls) * 100
+
         # 盈亏比
-        avg_win = np.mean(winning_trades) if winning_trades else 0
-        losing_trades = [abs(p) for p in trade_pnls if p < 0]
-        avg_loss = np.mean(losing_trades) if losing_trades else 1
-        profit_loss_ratio = avg_win / avg_loss if avg_loss > 0 else 0
-        
+        avg_win  = float(sum(winning) / len(winning)) if winning else 0.0
+        avg_loss = float(sum(losing)  / len(losing))  if losing  else 1.0
+        profit_loss_ratio = avg_win / avg_loss if avg_loss > 0 else 0.0
+
         return {
             'num_trades': len(trades),
             'num_complete_trades': len(trade_pnls),

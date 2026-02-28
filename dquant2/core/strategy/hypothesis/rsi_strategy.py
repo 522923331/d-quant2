@@ -46,11 +46,14 @@ class RSIStrategy(BaseStrategy):
         )
     
     def _calculate_rsi(self, prices: pd.Series) -> pd.Series:
-        """计算RSI指标"""
+        """计算RSI指标（标准 Wilder's Smoothing）"""
         delta = prices.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=self.period).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=self.period).mean()
-        rs = gain / loss
+        gain = delta.clip(lower=0)
+        loss = -delta.clip(upper=0)
+        # Wilder's smoothing: EMA with alpha = 1/period (com = period - 1)
+        avg_gain = gain.ewm(com=self.period - 1, min_periods=self.period, adjust=False).mean()
+        avg_loss = loss.ewm(com=self.period - 1, min_periods=self.period, adjust=False).mean()
+        rs = avg_gain / avg_loss.replace(0, float('nan'))
         rsi = 100 - (100 / (1 + rs))
         return rsi
     

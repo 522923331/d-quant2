@@ -188,12 +188,8 @@ class StockListManager:
             是否更新成功
         """
         try:
-            if data_provider == 'akshare':
-                from dquant2.stock.data_provider import AkShareDataProvider
-                provider = AkShareDataProvider()
-            else:
-                from dquant2.stock.data_provider import BaostockDataProvider
-                provider = BaostockDataProvider()
+            from dquant2.stock.data_provider import create_data_provider
+            provider = create_data_provider(data_provider)
             
             # 加载股票名称
             provider.login()
@@ -246,7 +242,7 @@ class StockListManager:
         self._cache.clear()
         logger.info("股票列表缓存已清除")
     
-    def get_or_update_daily_list(self, list_name: str) -> List[Dict]:
+    def get_or_update_daily_list(self, list_name: str, data_provider: str = 'akshare') -> List[Dict]:
         """获取或更新每日股票列表
         
         如果是当天第一次请求，会从数据源更新列表；
@@ -254,18 +250,47 @@ class StockListManager:
         
         Args:
             list_name: 列表名称，如 '全市场', '上证A股', '深证A股'
+            data_provider: 数据源
             
         Returns:
             股票列表
         """
         from datetime import datetime
         
-        # 映射内部名称
-        # 如果是"全市场"，我们可能没有直接对应的单个文件，需要合并或者定义一个新名
-        # 为了简单，我们定义 '全市场' 对应 'all_stocks'
-        # '上证A股' 对应 'sh_stocks'
-        # '深证A股' 对应 'sz_stocks'
-        
+        # 1. 针对本地数据库数据源，极简透传，不写入或读取任何 CSV 文件
+        if data_provider == 'local_db':
+            logger.info("选用本地数据库源，直接从 LocalDB 取实时列表，跳过 CSV 缓存。")
+            try:
+                from dquant2.stock.data_provider import create_data_provider
+                provider = create_data_provider('local_db')
+                stocks = []
+                
+                if list_name in ['全市场', '全部股票']:
+                    sh_codes = provider.get_stock_list('sh')
+                    sz_codes = provider.get_stock_list('sz')
+                    all_codes = sh_codes + sz_codes
+                elif list_name == '上证A股':
+                    all_codes = provider.get_stock_list('sh')
+                elif list_name == '深证A股':
+                    all_codes = provider.get_stock_list('sz')
+                else:
+                    return self.load_list(list_name)  # 自定义列表仍走本地 CSV 逻辑
+                    
+                # 组装返回格式
+                for code in all_codes:
+                    name = provider.get_stock_name(code)
+                    if code.startswith('6'):
+                        full_code = f"{code}.SH"
+                    else:
+                        full_code = f"{code}.SZ"
+                    stocks.append({'code': full_code, 'name': name})
+                
+                return stocks
+            except Exception as e:
+                logger.error(f"LocalDB 获取全市场列表异常: {e}")
+                return []
+                
+        # 2. 针对外部数据源(AkShare/Baostock)，继续走 CSV 刚性缓存保护机制
         name_map = {
             '全市场': '全部股票',
             '上证A股': '上证A股',
@@ -288,10 +313,7 @@ class StockListManager:
         if should_update:
             logger.info(f"股票列表 '{target_name}' 需要更新 (本地文件不存在或过期)")
             # 尝试更新
-            # 注意: '全部股票' 在 update_list_from_provider 中已有逻辑
-            # 但是 Baostock/AkShare 是否能快速获取全列表?
-            # update_list_from_provider 默认使用 akshare, 比较快
-            if self.update_list_from_provider(target_name):
+            if self.update_list_from_provider(target_name, data_provider=data_provider):
                 logger.info(f"已更新每日列表: {target_name}")
             else:
                 logger.warning(f"更新列表 {target_name} 失败，将尝试使用旧文件(如果存在)")

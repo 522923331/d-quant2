@@ -481,13 +481,103 @@ def create_data_provider(provider_name: str = 'baostock'):
     """创建数据提供者工厂函数
     
     Args:
-        provider_name: 数据源名称，'baostock' 或 'akshare'
+        provider_name: 数据源名称，'baostock'、'akshare' 或 'local_db'
         
     Returns:
         数据提供者实例
     """
     if provider_name.lower() == 'akshare':
         return AkShareDataProvider()
+    elif provider_name.lower() == 'local_db':
+        return LocalDBStockDataProvider()
     else:
         return BaostockDataProvider()
 
+
+class LocalDBStockDataProvider:
+    """本地 SQLite 数据库选股数据提供者
+
+    封装 LocalDBProvider，为选股模块提供统一接口：
+    login/logout/load_stock_names/get_stock_data/get_stock_name/get_stock_list/get_stock_basics
+    """
+
+    def __init__(self):
+        from dquant2.core.data.providers.local_db_provider import LocalDBProvider
+        self._provider = LocalDBProvider()
+        self._stock_name_map: Dict[str, str] = {}
+
+    # ---- 接口兼容方法 ----
+
+    def login(self) -> bool:
+        """本地数据库无需登录"""
+        logger.info("LocalDB 数据源无需登录，初始化完成")
+        return True
+
+    def logout(self):
+        """本地数据库无需登出"""
+        pass
+
+    def load_stock_names(self) -> bool:
+        """从 stock_basic 加载股票名称映射"""
+        try:
+            basics = self._provider.get_stock_basics()
+            if not basics.empty and 'code' in basics.columns and 'name' in basics.columns:
+                self._stock_name_map = dict(zip(basics['code'], basics['name']))
+                logger.info(f"LocalDB: 加载 {len(self._stock_name_map)} 只股票名称")
+            return True
+        except Exception as e:
+            logger.error(f"LocalDB: 加载股票名称失败: {e}")
+            return True  # 非致命，继续执行
+
+    def get_stock_name(self, stock_code: str) -> str:
+        """获取股票名称"""
+        # 先查内存映射
+        if stock_code in self._stock_name_map:
+            return self._stock_name_map[stock_code]
+        # 再查数据库
+        return self._provider.get_stock_name(stock_code)
+
+    def get_stock_list(self, market: str = 'sh') -> List[str]:
+        """获取指定市场股票列表（纯数字代码）"""
+        return self._provider.get_stock_list_from_db(market)
+
+    def get_stock_data(
+        self,
+        stock_code: str,
+        start_date: str,
+        end_date: str,
+        retries: int = 1,
+    ) -> pd.DataFrame:
+        """获取前复权日线数据
+
+        Args:
+            stock_code: 纯数字代码, 如 '000001'
+            start_date: YYYY-MM-DD 格式
+            end_date:   YYYY-MM-DD 格式
+        """
+        # get_bars 接受 YYYYMMDD 格式
+        start_8 = start_date.replace('-', '')
+        end_8 = end_date.replace('-', '')
+        try:
+            df = self._provider.get_bars(stock_code, start_8, end_8, freq='d')
+            return df
+        except Exception as e:
+            logger.warning(f"LocalDB: 获取 {stock_code} 数据失败: {e}")
+            return pd.DataFrame()
+
+    def get_fundamental_data(self, stock_code: str, year: str, quarter: int = 4) -> pd.DataFrame:
+        """基本面数据（暂不支持，返回空）"""
+        logger.debug("LocalDB: 暂不支持基本面数据查询")
+        return pd.DataFrame()
+
+    def get_stock_basics(self) -> pd.DataFrame:
+        """获取股票基础信息（市值、成交量等）"""
+        return self._provider.get_stock_basics()
+
+    def __enter__(self):
+        self.login()
+        self.load_stock_names()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.logout()
