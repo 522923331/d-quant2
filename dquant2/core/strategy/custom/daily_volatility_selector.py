@@ -58,7 +58,8 @@ Score =
 
 """
 
-import akshare as ak
+import os
+import sqlite3
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
@@ -81,26 +82,64 @@ class DailyRotationStrategy:
         self.max_position_ratio = max_position_ratio
 
     # =========================
-    # 1. 获取股票基础池
+    # 1. 获取股票基础池 (改为本地数据库)
     # =========================
     def get_stock_universe(self) -> pd.DataFrame:
         """
-        获取A股实时行情（包含市值、换手率等）
+        从本地 quant.db 获取最新一天的A股横截面行情
+        包含市值、换手率等
         """
-        df = ak.stock_zh_a_spot_em()
-
-        # 字段标准化
-        df = df.rename(columns={
-            "代码": "symbol",
-            "名称": "name",
-            "最新价": "price",
-            "成交额": "amount",
-            "换手率": "turnover",
-            "总市值": "market_cap",
-            "振幅": "amplitude",
-        })
-
-        return df
+        # 连接本地数据库
+        db_path = 'data/db/quant.db'
+        if not os.path.exists(db_path):
+            print(f"警告：找不到本地数据库 {db_path}，请先使用 Tushare 下载数据。")
+            return pd.DataFrame()
+            
+        conn = sqlite3.connect(db_path)
+        
+        try:
+            # 获取最新有交易的日期
+            cursor = conn.cursor()
+            cursor.execute("SELECT MAX(trade_date) FROM daily")
+            latest_date = cursor.fetchone()[0]
+            
+            if not latest_date:
+                print("警告：daily 表中没有找到价格数据。")
+                return pd.DataFrame()
+                
+            print(f"✅ 使用本地数据库截面日期: {latest_date}")
+            
+            # 使用 SQL JOIN 直接提取最新的横截面数据
+            sql = f"""
+            SELECT 
+                d.ts_code as symbol,
+                sb.name as name,
+                d.close as price,
+                d.amount * 1000 as amount,        -- tushare的amount是千元,AKShare通常是元
+                db.turnover_rate as turnover,
+                db.circ_mv * 10000 as market_cap, -- tushare的circ_mv是万元
+                ((d.high - d.low) / d.pre_close) * 100 as amplitude
+            FROM daily d
+            JOIN stock_basic sb ON d.ts_code = sb.ts_code
+            LEFT JOIN daily_basic db ON d.ts_code = db.ts_code AND d.trade_date = db.trade_date
+            WHERE d.trade_date = '{latest_date}'
+            """
+            
+            df = pd.read_sql_query(sql, conn)
+            
+            # 兼容 AKShare 前端代码所预期的格式
+            # (不需要再 rename，因为 SQL 已经 as 好了)
+            
+            # 将 symbol 例如 000001.SZ 格式转换为 纯代码 (如果是前端期待的话)
+            # 根据原先 AKShare 返回的逻辑，如果是保留原样则无需处理
+            
+            return df
+            
+        except Exception as e:
+            print(f"从本地数据库获取数据失败: {e}")
+            return pd.DataFrame()
+        finally:
+            conn.close()
 
     # =========================
     # 2. 股票筛选

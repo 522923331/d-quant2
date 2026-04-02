@@ -276,15 +276,15 @@ def stock_selection_page():
         
         # 技术指标
         st.subheader("技术指标")
-        use_macd = st.checkbox("MACD金叉", value=True)
-        use_kdj = st.checkbox("KDJ可买入", value=True)
-        use_rsi = st.checkbox("RSI超卖(<30)", value=True)
-        use_cci = st.checkbox("CCI超卖(<-100)", value=True)
-        use_wma = st.checkbox("价格 > 加权均线", value=True)
-        use_ema = st.checkbox("价格 > 指数均线", value=True)
-        use_sma = st.checkbox("价格 > 简单均线", value=True)
-        use_volume = st.checkbox("成交量放大", value=True)
-        use_boll = st.checkbox("布林带下轨", value=True)
+        use_macd = st.checkbox("MACD金叉", value=False)
+        use_kdj = st.checkbox("KDJ可买入", value=False)
+        use_rsi = st.checkbox("RSI超卖(<30)", value=False)
+        use_cci = st.checkbox("CCI超卖(<-100)", value=False)
+        use_wma = st.checkbox("价格 > 加权均线", value=False)
+        use_ema = st.checkbox("价格 > 指数均线", value=False)
+        use_sma = st.checkbox("价格 > 简单均线", value=False)
+        use_volume = st.checkbox("成交量放大", value=False)
+        use_boll = st.checkbox("布林带下轨", value=False)
         
         # 价格和换手率
         st.subheader("价格与换手率")
@@ -338,8 +338,17 @@ def stock_selection_page():
         with st.expander("📊 基本面指标(可选)"):
             use_pe_ratio = st.checkbox("市盈率 < 20", value=False)
             use_pb_ratio = st.checkbox("市净率 < 2", value=False)
-            use_roe = st.checkbox("ROE > 15%", value=False)
-            use_net_profit_margin = st.checkbox("净利率 > 10%", value=False)
+            
+            # LocalDB 不包含 roe 和 净利率 字段
+            is_local = (stock_data_provider == 'local_db')
+            roe_help = "本地数据库暂时未包含 ROE 数据" if is_local else ""
+            npm_help = "本地数据库暂时未包含净利率数据" if is_local else ""
+            
+            use_roe = st.checkbox("ROE > 15%", value=False, disabled=is_local, help=roe_help)
+            use_net_profit_margin = st.checkbox("净利率 > 10%", value=False, disabled=is_local, help=npm_help)
+            
+            if is_local and (use_roe or use_net_profit_margin):
+                st.warning("所选的数据源不支持 ROE 或 净利率，这部分过滤将被忽略")
         
         # 开始选股按钮
         run_selection = st.button("🚀 开始选股", type="primary", width="stretch")
@@ -2197,12 +2206,18 @@ def backtest_history_page():
             
             with col2:
                 st.markdown("**性能指标**")
-                st.write(f"- 总收益率: {record['total_return_pct']:.2f}%")
-                st.write(f"- 年化收益率: {record['annual_return']:.2f}%")
-                st.write(f"- 最大回撤: {record['max_drawdown']:.2f}%")
-                st.write(f"- 夏普比率: {record['sharpe_ratio']:.2f}")
-                st.write(f"- 胜率: {record['win_rate']:.2f}%")
-                st.write(f"- 交易次数: {record['num_trades']}")
+                
+                def safe_fmt(val, suffix="", is_pct=False):
+                    if val is None:
+                        return "暂无数据"
+                    return f"{val:.2f}{suffix}"
+
+                st.write(f"- 总收益率: {safe_fmt(record.get('total_return_pct'), '%')}")
+                st.write(f"- 年化收益率: {safe_fmt(record.get('annual_return'), '%')}")
+                st.write(f"- 最大回撤: {safe_fmt(record.get('max_drawdown'), '%')}")
+                st.write(f"- 夏普比率: {safe_fmt(record.get('sharpe_ratio'))}")
+                st.write(f"- 胜率: {safe_fmt(record.get('win_rate'), '%')}")
+                st.write(f"- 交易次数: {record.get('num_trades', 0)}")
             
             # 操作按钮
             st.divider()
@@ -2234,6 +2249,52 @@ def backtest_history_page():
         st.info("暂无历史记录")
 
 
+def cross_sectional_page():
+    """横截面多因子轮动选股页面"""
+    st.markdown('<h1 class="main-header">🌊 多因子轮动选股 (横截面 Alpha)</h1>', unsafe_allow_html=True)
+    
+    st.info("基于日终数据的多因子打分轮动策略。目前逻辑为调取本地 quant.db 数据库最新截面行情数据，根据市值、流动性过滤后，用均额、换手率、振幅计算截面得分 (Z-Score) 并选取 Top N 标的。")
+    
+    with st.form("cross_sectional_form"):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            target_stock_num = st.number_input("目标持仓股数", min_value=1, max_value=20, value=5)
+        with col2:
+            capital = st.number_input("模拟总资金 (元)", min_value=10000, max_value=100000000, value=1000000, step=10000)
+        with col3:
+            max_position_ratio = st.slider("单股最大仓位", min_value=0.1, max_value=1.0, value=0.2, step=0.05)
+            
+        submit_btn = st.form_submit_button("🚀 运行横截面打分选股", use_container_width=True)
+        
+    if submit_btn:
+        with st.spinner("正在拉取全市场实时数据并计算因子打分，请稍候..."):
+            try:
+                # 延迟引入以防止启动慢
+                from dquant2.core.strategy.custom.daily_volatility_selector import DailyRotationStrategy
+                
+                strategy = DailyRotationStrategy(
+                    target_stock_num=target_stock_num,
+                    capital=capital,
+                    max_position_ratio=max_position_ratio
+                )
+                
+                selected = strategy.select_stocks()
+                
+                if selected.empty:
+                    st.warning("未能选出符合条件的股票。可能是当前市场数据为空或过滤条件过于严格。")
+                else:
+                    positions = strategy.allocate_positions(selected)
+                    st.success(f"成功筛选出综合评分排名前 {len(positions)} 的标的！")
+                    
+                    st.subheader("📊 今日选股与仓位分配")
+                    st.dataframe(
+                        positions[['symbol', 'name', 'price', 'market_cap', 'turnover', 'amount', 'amplitude', 'score', 'shares']],
+                        use_container_width=True,
+                        hide_index=True
+                    )
+            except Exception as e:
+                st.error(f"发生错误: {e}")
+
 def main():
     """主函数 - 页面路由"""
     setup_page()
@@ -2243,7 +2304,7 @@ def main():
         st.title("d-quant2 量化系统")
         page = st.radio(
             "选择功能",
-            ["📈 回测分析", "🔍 智能选股", "📊 回测对比", "🔄 选股回测联动", 
+            ["📈 回测分析", "🔍 智能选股", "🌊 多因子轮动选股", "📊 回测对比", "🔄 选股回测联动", 
              "💾 数据管理", "🛡️ 风控仪表盘", "🔬 高级分析", "📚 回测历史"],
             label_visibility="collapsed"
         )
@@ -2254,6 +2315,8 @@ def main():
         backtest_page()
     elif page == "🔍 智能选股":
         stock_selection_page()
+    elif page == "🌊 多因子轮动选股":
+        cross_sectional_page()
     elif page == "📊 回测对比":
         backtest_comparison_page()
     elif page == "🔄 选股回测联动":

@@ -134,6 +134,7 @@ class StockSelector:
             # 如果有基础信息，进行市值和成交量初筛
             if not basics_df.empty and (self.config.use_market_cap or self.config.use_volume_absolute):
                 self._notify_progress("正在进行市值和成交量初筛...")
+                self.pre_screen_details = {}  # 存储预筛选补充的通过详情
                 for code in stock_list:
                     # 查找对应信息
                     row = basics_df[basics_df['code'] == code]
@@ -144,6 +145,7 @@ class StockSelector:
                     
                     row = row.iloc[0]
                     keep = True
+                    stock_details = []
                     
                     # 市值筛选
                     if self.config.use_market_cap:
@@ -151,6 +153,8 @@ class StockSelector:
                              mcap = float(row.get('market_cap', 0))
                              if mcap > 0 and (mcap < self.config.min_market_cap or mcap > self.config.max_market_cap):
                                  keep = False
+                             elif mcap > 0:
+                                 stock_details.append(f"市值({mcap:.1f}亿): 通过")
                          except:
                              pass
                     
@@ -160,11 +164,15 @@ class StockSelector:
                             vol = float(row.get('volume', 0))
                             if vol > 0 and (vol < self.config.min_volume or vol > self.config.max_volume):
                                 keep = False
+                            elif vol > 0:
+                                stock_details.append(f"成交量({vol / 10000:.1f}万手): 通过")
                         except:
                             pass
                     
                     if keep:
                         filtered_stock_list.append(code)
+                        if stock_details:
+                            self.pre_screen_details[code] = stock_details
                 
                 self._notify_progress(f"初筛后剩余 {len(filtered_stock_list)} 只股票 (原 {len(stock_list)} 只)")
                 stock_list = filtered_stock_list
@@ -271,6 +279,10 @@ class StockSelector:
                 stock_name = self.data_provider.get_stock_name(stock_code)
                 last_close = float(stock_df['close'].iloc[-1])
                 last_date = stock_df.index[-1]
+                
+                # 追加初筛指标通过详情
+                if hasattr(self, 'pre_screen_details') and stock_code in self.pre_screen_details:
+                    details = self.pre_screen_details[stock_code] + details
                 
                 return {
                     'code': stock_code,
